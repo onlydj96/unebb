@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:unebb/core/utils/logger.dart';
 import 'package:unebb/data/repositories/providers.dart';
 import 'package:unebb/domain/models/ai_evaluation.dart';
 import 'package:unebb/domain/models/memory_state.dart';
@@ -148,35 +149,54 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
 
   // ── Public: session lifecycle ──────────────────────────────────────────────
 
-  Future<void> startSession() async {
+  Future<void> startSession({String mode = 'due', int? limit, String? deckId}) async {
     state = const ReviewUiState(phase: ReviewPhase.loading);
     try {
       final memRepo = _ref.read(memoryStateRepositoryProvider);
       final reviewRepo = _ref.read(reviewRepositoryProvider);
 
-      final dueStates = await memRepo.getDueForReview();
+      final dueStates = mode == 'all'
+          ? await memRepo.getAllForReview()
+          : await memRepo.getDueForReview();
       if (dueStates.isEmpty) {
         state = const ReviewUiState(phase: ReviewPhase.empty);
         return;
       }
 
+      // Get all vocabulary items first
       final vocabIds = dueStates.map((s) => s.vocabularyId).toList();
       final session = await reviewRepo.createSession(vocabularyIds: vocabIds);
 
-      final reviewable = session.vocabularyItems
+      // Apply all filters first: definition exists + deckId
+      var reviewable = session.vocabularyItems
           .where((item) => item.definition != null)
           .toList();
+
+      if (deckId != null) {
+        reviewable = reviewable.where((item) => item.deckId == deckId).toList();
+      }
 
       if (reviewable.isEmpty) {
         state = const ReviewUiState(phase: ReviewPhase.empty);
         return;
       }
 
+      // THEN apply limit to the filtered list
+      final limitedReviewable = limit != null && limit < reviewable.length
+          ? reviewable.take(limit).toList()
+          : reviewable;
+
+      // Also limit the memory states to match
+      final limitedVocabIds = limitedReviewable.map((v) => v.id).toSet();
+      final limitedStates = dueStates
+          .where((ms) => limitedVocabIds.contains(ms.vocabularyId))
+          .toList();
+
       final filteredSession = session.copyWith(
-        vocabularyItems: reviewable,
-        totalItems: reviewable.length,
+        vocabularyItems: limitedReviewable,
+        totalItems: limitedReviewable.length,
       );
-      final stateMap = {for (final ms in dueStates) ms.vocabularyId: ms};
+      final stateMap = {for (final ms in limitedStates) ms.vocabularyId: ms};
 
       // Load patterns for the first item
       final firstItem = filteredSession.vocabularyItems.first;
@@ -217,6 +237,8 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     );
 
     try {
+      final profile = await _ref.read(profileProvider.future);
+      final nativeLanguage = profile?.nativeLanguage ?? 'Korean';
       final knownPatterns = [...state.wordPatterns, ...state.globalPatterns];
 
       final evaluation =
@@ -229,6 +251,7 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
                 answerType: 'text',
                 evalType: 'meaning',
                 knownPatterns: knownPatterns,
+                nativeLanguage: nativeLanguage,
               );
 
       if (evaluation.overallScore < 0.6) {
@@ -282,6 +305,8 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     );
 
     try {
+      final profile = await _ref.read(profileProvider.future);
+      final nativeLanguage = profile?.nativeLanguage ?? 'Korean';
       final knownPatterns = [...state.wordPatterns, ...state.globalPatterns];
 
       final evaluation =
@@ -295,6 +320,7 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
                 evalType: 'translation',
                 questionContext: state.translationSentence,
                 knownPatterns: knownPatterns,
+                nativeLanguage: nativeLanguage,
               );
 
       // Persist patterns from both steps
@@ -491,7 +517,7 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
   }
 
   /// Persist detected patterns to Supabase (word-specific + global).
-  /// Errors are swallowed — pattern persistence must not break the review flow.
+  /// Errors are logged but swallowed — pattern persistence must not break the review flow.
   Future<void> _persistPatterns({
     required String vocabularyId,
     required List<String> patterns,
@@ -507,7 +533,13 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
         vocabularyId: null,
         patternTexts: patterns,
       );
-    } catch (_) {}
+    } catch (e, stackTrace) {
+      AppLogger.warning(
+        'Failed to persist error patterns',
+        details: {'vocabularyId': vocabularyId, 'error': e},
+      );
+      AppLogger.debug('Pattern persistence stack trace', data: stackTrace);
+    }
   }
 
   Future<List<String>> _loadWordPatterns(String vocabularyId) async {
@@ -516,7 +548,12 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
           .read(errorPatternRepositoryProvider)
           .getForWord(vocabularyId: vocabularyId);
       return patterns.map((p) => p.patternText).toList();
-    } catch (_) {
+    } catch (e, stackTrace) {
+      AppLogger.warning(
+        'Failed to load word-specific error patterns',
+        details: {'vocabularyId': vocabularyId, 'error': e},
+      );
+      AppLogger.debug('Word patterns loading stack trace', data: stackTrace);
       return [];
     }
   }
@@ -526,7 +563,12 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       final patterns =
           await _ref.read(errorPatternRepositoryProvider).getGlobal();
       return patterns.map((p) => p.patternText).toList();
-    } catch (_) {
+    } catch (e, stackTrace) {
+      AppLogger.warning(
+        'Failed to load global error patterns',
+        details: e,
+      );
+      AppLogger.debug('Global patterns loading stack trace', data: stackTrace);
       return [];
     }
   }

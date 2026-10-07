@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:unebb/core/theme/app_colors.dart';
 import 'package:unebb/core/theme/app_radius.dart';
@@ -22,6 +23,16 @@ class WordDetailScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Word Detail'),
         actions: [
+          itemAsync.whenOrNull(
+                data: (item) => item != null
+                    ? IconButton(
+                        icon: const Icon(Icons.edit_outlined),
+                        tooltip: 'Edit word',
+                        onPressed: () => context.push('/words/${item.id}/edit'),
+                      )
+                    : null,
+              ) ??
+              const SizedBox.shrink(),
           itemAsync.whenOrNull(
                 data: (item) => item != null
                     ? IconButton(

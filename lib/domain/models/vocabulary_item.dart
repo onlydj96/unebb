@@ -8,6 +8,7 @@ abstract class VocabularyItem with _$VocabularyItem {
   const factory VocabularyItem({
     required String id,
     required String userId,
+    String? deckId,
     required String word,
     required String language,
     // AI-generated fields — null until generate-explanation runs

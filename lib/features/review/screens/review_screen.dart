@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 
 import 'package:unebb/core/theme/app_colors.dart';
 import 'package:unebb/core/theme/app_radius.dart';
@@ -13,7 +14,11 @@ import 'package:unebb/shared/widgets/feedback_card.dart';
 import 'package:unebb/shared/widgets/memory_indicator.dart';
 
 class ReviewScreen extends ConsumerStatefulWidget {
-  const ReviewScreen({super.key});
+  const ReviewScreen({super.key, this.mode = 'due', this.limit, this.deckId});
+
+  final String mode;
+  final int? limit;
+  final String? deckId;
 
   @override
   ConsumerState<ReviewScreen> createState() => _ReviewScreenState();
@@ -26,7 +31,11 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(reviewNotifierProvider.notifier).startSession();
+      ref.read(reviewNotifierProvider.notifier).startSession(
+            mode: widget.mode,
+            limit: widget.limit,
+            deckId: widget.deckId,
+          );
     });
   }
 
@@ -80,7 +89,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
               ),
             ReviewPhase.evaluatingMeaning => _BusyView(
                 word: state.currentItem?.word ?? '',
-                message: 'Checking your answer…',
+                message: AppLocalizations.of(context)!.checkingYourAnswer,
               ),
             ReviewPhase.meaningFailed => _MeaningFailedView(
                 item: state.currentItem!,
@@ -90,7 +99,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
               ),
             ReviewPhase.generatingTranslation => _BusyView(
                 word: state.currentItem?.word ?? '',
-                message: 'Preparing translation exercise…',
+                message: AppLocalizations.of(context)!.preparingTranslationExercise,
               ),
             ReviewPhase.translationInput => _TranslationInputView(
                 item: state.currentItem!,
@@ -108,7 +117,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
               ),
             ReviewPhase.evaluatingTranslation => _BusyView(
                 word: state.currentItem?.word ?? '',
-                message: 'Evaluating your translation…',
+                message: AppLocalizations.of(context)!.evaluatingYourTranslation,
               ),
             ReviewPhase.showResult => _ResultView(
                 item: state.currentItem!,
@@ -155,7 +164,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
         style: AppTypography.headingSmall,
       );
     }
-    return const Text('Review');
+    return Text(AppLocalizations.of(context)!.review);
   }
 }
 
@@ -217,7 +226,7 @@ class _FlashCardFront extends StatelessWidget {
                           size: 16, color: AppColors.textMuted),
                       const SizedBox(width: AppSpacing.xs),
                       Text(
-                        'Tap to answer',
+                        AppLocalizations.of(context)!.tapToAnswer,
                         style: AppTypography.bodySmall
                             .copyWith(color: AppColors.textMuted),
                       ),
@@ -290,20 +299,23 @@ class _MeaningInputView extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.lg),
           Text(
-            'What does this word mean?',
+            AppLocalizations.of(context)!.whatIsTheMeaning,
             style: AppTypography.bodyMedium
                 .copyWith(color: AppColors.textSecondary),
           ),
           const SizedBox(height: AppSpacing.sm),
           TextField(
             controller: controller,
-            maxLines: 4,
+            maxLines: 1,
             autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'Explain the meaning, usage, or give an example…',
-              alignLabelWithHint: true,
+            decoration: InputDecoration(
+              hintText: AppLocalizations.of(context)!.enterMeaningHint,
             ),
             textInputAction: TextInputAction.done,
+            onSubmitted: (value) {
+              final answer = value.trim();
+              if (answer.isNotEmpty) onSubmit(answer);
+            },
           ),
           const SizedBox(height: AppSpacing.md),
           FilledButton(
@@ -311,7 +323,7 @@ class _MeaningInputView extends StatelessWidget {
               final answer = controller.text.trim();
               if (answer.isNotEmpty) onSubmit(answer);
             },
-            child: const Text('Submit answer'),
+            child: Text(AppLocalizations.of(context)!.submitAnswer),
           ),
         ],
       ),
@@ -403,7 +415,7 @@ class _MeaningFailedView extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Correct meaning',
+                  AppLocalizations.of(context)!.correctMeaning,
                   style: AppTypography.bodySmall.copyWith(
                     color: AppColors.error,
                     fontWeight: FontWeight.w600,
@@ -422,7 +434,7 @@ class _MeaningFailedView extends StatelessWidget {
           const SizedBox(height: AppSpacing.xl),
           FilledButton(
             onPressed: onNext,
-            child: const Text('Next word'),
+            child: Text(AppLocalizations.of(context)!.nextWord),
           ),
         ],
       ),
@@ -467,7 +479,7 @@ class _TranslationInputView extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.xl),
           Text(
-            'Translate into ${item.language}',
+            AppLocalizations.of(context)!.translateInto(item.language),
             style: AppTypography.bodyMedium
                 .copyWith(color: AppColors.textSecondary),
           ),
@@ -489,7 +501,7 @@ class _TranslationInputView extends StatelessWidget {
                     size: 14, color: AppColors.textMuted),
                 const SizedBox(width: 4),
                 Text(
-                  'Hint: use "$wordHint"',
+                  AppLocalizations.of(context)!.hintUseWord(wordHint!),
                   style: AppTypography.bodySmall
                       .copyWith(color: AppColors.textMuted),
                 ),
@@ -502,7 +514,7 @@ class _TranslationInputView extends StatelessWidget {
             maxLines: 4,
             autofocus: true,
             decoration: InputDecoration(
-              hintText: 'Your ${item.language} translation…',
+              hintText: AppLocalizations.of(context)!.yourTranslationHint(item.language),
               alignLabelWithHint: true,
             ),
             textInputAction: TextInputAction.done,
@@ -513,7 +525,7 @@ class _TranslationInputView extends StatelessWidget {
               final answer = controller.text.trim();
               if (answer.isNotEmpty) onSubmit(answer);
             },
-            child: const Text('Submit translation'),
+            child: Text(AppLocalizations.of(context)!.submitTranslation),
           ),
         ],
       ),
@@ -592,11 +604,11 @@ class _ResultView extends StatelessWidget {
             weakPoint: primaryFeedback.weakPoint,
           ),
           const SizedBox(height: AppSpacing.md),
-          _ScoreRow('Meaning', meaningEvaluation.meaningScore),
-          _ScoreRow('Usage', meaningEvaluation.usageScore),
+          _ScoreRow(AppLocalizations.of(context)!.meaning, meaningEvaluation.meaningScore),
+          _ScoreRow(AppLocalizations.of(context)!.usage, meaningEvaluation.usageScore),
           if (translationEvaluation != null)
-            _ScoreRow('Translation', translationEvaluation!.usageScore),
-          _ScoreRow('Grammar', primaryFeedback.grammarScore),
+            _ScoreRow(AppLocalizations.of(context)!.translation, translationEvaluation!.usageScore),
+          _ScoreRow(AppLocalizations.of(context)!.grammar, primaryFeedback.grammarScore),
           if (detectedPatterns.isNotEmpty) ...[
             const SizedBox(height: AppSpacing.md),
             _PatternBadges(patterns: detectedPatterns),
@@ -610,7 +622,9 @@ class _ResultView extends StatelessWidget {
           FilledButton(
             onPressed: onNext,
             child: Text(
-              currentIndex + 1 < totalItems ? 'Next word' : 'Finish',
+              currentIndex + 1 < totalItems
+                ? AppLocalizations.of(context)!.nextWord
+                : AppLocalizations.of(context)!.finish,
             ),
           ),
         ],
@@ -678,7 +692,7 @@ class _PatternBadges extends StatelessWidget {
                 size: 14, color: AppColors.warning),
             const SizedBox(width: 4),
             Text(
-              'Patterns to watch',
+              AppLocalizations.of(context)!.patternsToWatch,
               style: AppTypography.bodySmall.copyWith(
                 color: AppColors.warning,
                 fontWeight: FontWeight.w600,
@@ -727,16 +741,16 @@ class _EmptyView extends StatelessWidget {
             const Icon(Icons.check_circle_outline,
                 size: 64, color: AppColors.success),
             const SizedBox(height: AppSpacing.md),
-            const Text('All caught up!', style: AppTypography.headingMedium),
+            Text(AppLocalizations.of(context)!.allCaughtUp, style: AppTypography.headingMedium),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              'No words are due for review right now.\nCome back later or add new words.',
+              AppLocalizations.of(context)!.noDueWords,
               style: AppTypography.bodyMedium
                   .copyWith(color: AppColors.textSecondary),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppSpacing.xl),
-            FilledButton(onPressed: onBack, child: const Text('Back')),
+            FilledButton(onPressed: onBack, child: Text(AppLocalizations.of(context)!.back)),
           ],
         ),
       ),
@@ -765,15 +779,15 @@ class _CompleteView extends StatelessWidget {
           children: [
             const Icon(Icons.star, size: 72, color: AppColors.warning),
             const SizedBox(height: AppSpacing.md),
-            const Text('Session complete!', style: AppTypography.headingMedium),
+            Text(AppLocalizations.of(context)!.sessionComplete, style: AppTypography.headingMedium),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              '$correctCount out of $totalItems correct',
+              AppLocalizations.of(context)!.correctOutOf(correctCount, totalItems),
               style: AppTypography.bodyLarge
                   .copyWith(color: AppColors.textSecondary),
             ),
             const SizedBox(height: AppSpacing.xl),
-            FilledButton(onPressed: onDone, child: const Text('Done')),
+            FilledButton(onPressed: onDone, child: Text(AppLocalizations.of(context)!.done)),
           ],
         ),
       ),
@@ -804,7 +818,7 @@ class _ErrorView extends StatelessWidget {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppSpacing.lg),
-            FilledButton(onPressed: onRetry, child: const Text('Retry')),
+            FilledButton(onPressed: onRetry, child: Text(AppLocalizations.of(context)!.retry)),
           ],
         ),
       ),

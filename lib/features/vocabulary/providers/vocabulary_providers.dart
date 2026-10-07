@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:unebb/data/repositories/providers.dart';
 import 'package:unebb/domain/models/memory_state.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
+import 'package:unebb/features/auth/providers/profile_provider.dart';
 
 /// Manages the full vocabulary list for the current user.
 class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>> {
@@ -14,17 +15,23 @@ class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>> {
   Future<void> addWord({
     required String word,
     required String language,
+    String? deckId,
   }) async {
     // 1. Create the vocabulary item row.
     final item = await ref.read(vocabularyRepositoryProvider).create(
           word: word,
           language: language,
+          deckId: deckId,
         );
 
     // 2. Create the initial memory state so it enters the review queue.
     await ref.read(memoryStateRepositoryProvider).create(vocabularyId: item.id);
 
-    // 3. Trigger AI explanation generation in the background.
+    // 3. Get user's native language for AI explanations.
+    final profile = await ref.read(profileProvider.future);
+    final nativeLanguage = profile?.nativeLanguage ?? 'Korean';
+
+    // 4. Trigger AI explanation generation in the background.
     //    Fire-and-forget: the list tile shows a loading indicator until
     //    the user refreshes and the definition is populated.
     ref
@@ -33,9 +40,15 @@ class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>> {
           vocabularyId: item.id,
           word: item.word,
           language: item.language,
+          nativeLanguage: nativeLanguage,
         )
         .ignore();
 
+    ref.invalidateSelf();
+  }
+
+  Future<void> updateWord(VocabularyItem item) async {
+    await ref.read(vocabularyRepositoryProvider).update(item);
     ref.invalidateSelf();
   }
 

@@ -37,10 +37,16 @@ class SupabaseVocabularyRepository implements VocabularyRepository {
   Future<VocabularyItem> create({
     required String word,
     required String language,
+    String? deckId,
   }) async {
     final row = await _client
         .from(_table)
-        .insert({'user_id': _userId, 'word': word, 'language': language})
+        .insert({
+          'user_id': _userId,
+          'word': word,
+          'language': language,
+          if (deckId != null) 'deck_id': deckId,
+        })
         .select()
         .single();
     return VocabularyItem.fromJson(row);

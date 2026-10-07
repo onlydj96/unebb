@@ -1,0 +1,62 @@
+{
+  "@@locale": "en",
+
+  "review": "Review",
+  "tapToAnswer": "Tap to answer",
+  "whatIsTheMeaning": "What is the meaning?",
+  "enterMeaningHint": "Enter the meaning (e.g., adjacent)",
+  "submitAnswer": "Submit answer",
+  "checkingYourAnswer": "Checking your answer…",
+  "correctMeaning": "Correct meaning",
+  "nextWord": "Next word",
+  "preparingTranslationExercise": "Preparing translation exercise…",
+  "translateInto": "Translate into {language}",
+  "@translateInto": {
+    "placeholders": {
+      "language": {
+        "type": "String"
+      }
+    }
+  },
+  "hintUseWord": "Hint: use \"{word}\"",
+  "@hintUseWord": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "yourTranslationHint": "Your {language} translation…",
+  "@yourTranslationHint": {
+    "placeholders": {
+      "language": {
+        "type": "String"
+      }
+    }
+  },
+  "submitTranslation": "Submit translation",
+  "evaluatingYourTranslation": "Evaluating your translation…",
+  "meaning": "Meaning",
+  "usage": "Usage",
+  "translation": "Translation",
+  "grammar": "Grammar",
+  "patternsToWatch": "Patterns to watch",
+  "allCaughtUp": "All caught up!",
+  "noDueWords": "No words are due for review right now.\nCome back later or add new words.",
+  "back": "Back",
+  "sessionComplete": "Session complete!",
+  "correctOutOf": "{correct} out of {total} correct",
+  "@correctOutOf": {
+    "placeholders": {
+      "correct": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "done": "Done",
+  "retry": "Retry",
+  "finish": "Finish"
+}

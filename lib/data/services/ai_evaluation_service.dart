@@ -20,6 +20,7 @@ class AiEvaluationService {
     String evalType = 'meaning', // 'meaning' | 'translation'
     String? questionContext,     // Korean sentence for translation eval
     List<String> knownPatterns = const [],
+    String? nativeLanguage,      // Learner's native language
   }) async {
     final response = await _client.functions.invoke(
       _function,
@@ -33,6 +34,7 @@ class AiEvaluationService {
         'eval_type': evalType,
         if (questionContext != null) 'question_context': questionContext,
         if (knownPatterns.isNotEmpty) 'known_patterns': knownPatterns,
+        if (nativeLanguage != null) 'native_language': nativeLanguage,
       },
     );
 

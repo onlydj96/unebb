@@ -6,7 +6,10 @@ import 'package:unebb/features/vocabulary/providers/vocabulary_providers.dart';
 
 /// Screen for adding a new vocabulary word.
 class AddWordScreen extends ConsumerStatefulWidget {
-  const AddWordScreen({super.key});
+  const AddWordScreen({super.key, this.deckId});
+
+  /// If provided, the word will be added to this deck.
+  final String? deckId;
 
   @override
   ConsumerState<AddWordScreen> createState() => _AddWordScreenState();
@@ -43,6 +46,7 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
       await ref.read(vocabularyNotifierProvider.notifier).addWord(
             word: _wordController.text.trim(),
             language: _selectedLanguage,
+            deckId: widget.deckId,
           );
       if (mounted) context.pop();
     } catch (e) {

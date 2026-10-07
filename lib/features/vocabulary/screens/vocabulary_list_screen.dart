@@ -9,6 +9,12 @@ import 'package:unebb/features/auth/providers/auth_provider.dart';
 import 'package:unebb/features/vocabulary/providers/vocabulary_providers.dart';
 import 'package:unebb/shared/widgets/vocabulary_card.dart';
 
+/// Checks if error is related to device clock sync (JWT issued at future).
+bool _isClockSyncError(Object error) {
+  final msg = error.toString().toLowerCase();
+  return msg.contains('jwt') && msg.contains('future');
+}
+
 /// Home screen — displays the user's vocabulary list.
 class VocabularyListScreen extends ConsumerWidget {
   const VocabularyListScreen({super.key});
@@ -43,7 +49,43 @@ class VocabularyListScreen extends ConsumerWidget {
       body: wordsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(
-          child: Text('Error loading words: $e'),
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _isClockSyncError(e) ? Icons.access_time : Icons.error_outline,
+                  size: 48,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  _isClockSyncError(e)
+                      ? 'Device clock out of sync'
+                      : 'Error loading words',
+                  style: AppTypography.bodyLarge,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  _isClockSyncError(e)
+                      ? 'Please check that your device date & time is set to automatic.'
+                      : '$e',
+                  style: AppTypography.bodyMedium.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                ElevatedButton.icon(
+                  onPressed: () => ref.invalidate(vocabularyNotifierProvider),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
         ),
         data: (words) {
           if (words.isEmpty) {

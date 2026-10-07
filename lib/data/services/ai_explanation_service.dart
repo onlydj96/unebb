@@ -18,6 +18,7 @@ class AiExplanationService {
     required String vocabularyId,
     required String word,
     required String language,
+    required String nativeLanguage,
   }) async {
     final response = await _client.functions.invoke(
       _function,
@@ -25,6 +26,7 @@ class AiExplanationService {
         'vocabulary_id': vocabularyId,
         'word': word,
         'language': language,
+        'native_language': nativeLanguage,
       },
     );
 

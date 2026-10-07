@@ -46,7 +46,7 @@ class _FakeReviewNotifier extends ReviewNotifier {
   _FakeReviewNotifier(super.ref);
 
   @override
-  Future<void> startSession() async {
+  Future<void> startSession({String mode = 'due', int? limit, String? deckId}) async {
     state = const ReviewUiState(phase: ReviewPhase.loading);
   }
 }

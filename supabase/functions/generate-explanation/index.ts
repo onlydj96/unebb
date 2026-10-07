@@ -6,6 +6,7 @@ interface RequestBody {
   vocabulary_id: string;
   word: string;
   language: string;
+  native_language?: string;
 }
 
 interface ExplanationResponse {
@@ -22,18 +23,19 @@ const systemPrompt = `You are a vocabulary learning assistant.
 Given a word and its language, generate educational content to help learners remember and use it.
 Return ONLY valid JSON — no markdown, no code fences, no extra text.`;
 
-function buildUserPrompt(word: string, language: string): string {
+function buildUserPrompt(word: string, language: string, nativeLanguage: string): string {
   return `Generate learning content for the ${language} word: "${word}"
+The learner's native language is ${nativeLanguage}. Write explanations in ${nativeLanguage}.
 
 Return a JSON object with exactly these fields:
 {
-  "definition": "Clear, concise definition in English (1-2 sentences)",
-  "explanation": "Explanation of nuance, origin, or context in Korean (2-3 sentences)",
-  "usage": "When and how to use this word (in English, 1-2 sentences)",
-  "examples": ["3 natural example sentences using the word"],
-  "synonyms": ["3-5 synonyms or near-synonyms"],
-  "collocations": ["4-6 common word combinations (e.g. 'make a decision')"],
-  "common_mistakes": ["2-3 common learner mistakes with brief corrections"]
+  "definition": "Clear, concise definition in ${nativeLanguage} (1-2 sentences)",
+  "explanation": "Explanation of nuance, origin, or context in ${nativeLanguage} (2-3 sentences)",
+  "usage": "When and how to use this word in ${nativeLanguage} (1-2 sentences)",
+  "examples": ["3 natural example sentences using the word in ${language}"],
+  "synonyms": ["3-5 synonyms or near-synonyms in ${language}"],
+  "collocations": ["4-6 common word combinations in ${language} (e.g. 'make a decision')"],
+  "common_mistakes": ["2-3 common mistakes ${nativeLanguage} speakers make, with corrections in ${nativeLanguage}"]
 }`;
 }
 
@@ -54,10 +56,11 @@ Deno.serve(async (req: Request) => {
     return new Response("Invalid JSON body", { status: 400 });
   }
 
-  const { vocabulary_id, word, language } = body;
+  const { vocabulary_id, word, language, native_language } = body;
   if (!vocabulary_id || !word || !language) {
     return new Response("Missing required fields", { status: 400 });
   }
+  const nativeLanguage = native_language || "Korean";
 
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) {
@@ -76,7 +79,7 @@ Deno.serve(async (req: Request) => {
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: buildUserPrompt(word, language) },
+        { role: "user", content: buildUserPrompt(word, language, nativeLanguage) },
       ],
     }),
   });

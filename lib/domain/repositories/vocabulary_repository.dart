@@ -6,6 +6,7 @@ abstract interface class VocabularyRepository {
   Future<VocabularyItem> create({
     required String word,
     required String language,
+    String? deckId,
   });
   Future<VocabularyItem> update(VocabularyItem item);
   Future<void> delete(String id);

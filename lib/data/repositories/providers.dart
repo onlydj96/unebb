@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:unebb/data/repositories/supabase_deck_repository.dart';
 import 'package:unebb/data/repositories/supabase_error_pattern_repository.dart';
 import 'package:unebb/data/repositories/supabase_memory_state_repository.dart';
 import 'package:unebb/data/repositories/supabase_review_repository.dart';
@@ -7,6 +8,7 @@ import 'package:unebb/data/repositories/supabase_vocabulary_repository.dart';
 import 'package:unebb/data/services/ai_evaluation_service.dart';
 import 'package:unebb/data/services/ai_explanation_service.dart';
 import 'package:unebb/data/services/ai_question_service.dart';
+import 'package:unebb/domain/repositories/deck_repository.dart';
 import 'package:unebb/domain/repositories/error_pattern_repository.dart';
 import 'package:unebb/domain/repositories/memory_state_repository.dart';
 import 'package:unebb/domain/repositories/review_repository.dart';
@@ -47,4 +49,8 @@ final aiQuestionServiceProvider = Provider<AiQuestionService>((ref) {
 
 final errorPatternRepositoryProvider = Provider<ErrorPatternRepository>((ref) {
   return SupabaseErrorPatternRepository(ref.read(supabaseClientProvider));
+});
+
+final deckRepositoryProvider = Provider<DeckRepository>((ref) {
+  return SupabaseDeckRepository(ref.read(supabaseClientProvider));
 });
