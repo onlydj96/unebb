@@ -1,0 +1,9 @@
+targets:
+  $default:
+    builders:
+      json_serializable:
+        options:
+          # Automatically convert camelCase Dart fields to snake_case JSON keys
+          # matching Supabase's PostgreSQL column naming convention.
+          field_rename: snake
+          explicit_to_json: true
