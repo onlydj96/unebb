@@ -19,6 +19,9 @@ enum ReviewPhase {
   complete,
   error,
   showWord,              // Flash card front — just the word
+  askKnowledge,          // Ask user if they know the word (know/don't know)
+  generatingExplanation, // AI generating explanation for unknown word
+  showExplanation,       // Show explanation for unknown word (user said "don't know")
   meaningInput,          // Card revealed — user types meaning
   evaluatingMeaning,     // Calling AI for meaning eval
   meaningFailed,         // Score < 0.6: show correct meaning + explanation
@@ -38,6 +41,8 @@ class ReviewUiState {
     this.session,
     this.memoryStates = const {},
     this.currentIndex = 0,
+    // Cached profile data
+    this.nativeLanguage = 'Korean',
     // Step 1 — meaning
     this.meaningAnswer,
     this.meaningEvaluation,
@@ -53,6 +58,7 @@ class ReviewUiState {
     // Error patterns
     this.wordPatterns = const [],
     this.globalPatterns = const [],
+    this.allWordPatterns = const {},
     // Error
     this.error,
   });
@@ -61,6 +67,9 @@ class ReviewUiState {
   final ReviewSession? session;
   final Map<String, MemoryState> memoryStates;
   final int currentIndex;
+
+  // Cached profile data
+  final String nativeLanguage;
 
   final String? meaningAnswer;
   final AiEvaluation? meaningEvaluation;
@@ -76,6 +85,9 @@ class ReviewUiState {
 
   final List<String> wordPatterns;
   final List<String> globalPatterns;
+
+  // Preloaded patterns for all words in session
+  final Map<String, List<String>> allWordPatterns;
 
   final String? error;
 
@@ -98,6 +110,7 @@ class ReviewUiState {
     ReviewSession? session,
     Map<String, MemoryState>? memoryStates,
     int? currentIndex,
+    String? nativeLanguage,
     String? meaningAnswer,
     AiEvaluation? meaningEvaluation,
     String? translationAnswer,
@@ -109,6 +122,7 @@ class ReviewUiState {
     int? correctCount,
     List<String>? wordPatterns,
     List<String>? globalPatterns,
+    Map<String, List<String>>? allWordPatterns,
     String? error,
     bool clearStepData = false,
   }) {
@@ -117,6 +131,7 @@ class ReviewUiState {
       session: session ?? this.session,
       memoryStates: memoryStates ?? this.memoryStates,
       currentIndex: currentIndex ?? this.currentIndex,
+      nativeLanguage: nativeLanguage ?? this.nativeLanguage,
       meaningAnswer: clearStepData ? null : meaningAnswer ?? this.meaningAnswer,
       meaningEvaluation:
           clearStepData ? null : meaningEvaluation ?? this.meaningEvaluation,
@@ -133,6 +148,7 @@ class ReviewUiState {
       correctCount: correctCount ?? this.correctCount,
       wordPatterns: wordPatterns ?? this.wordPatterns,
       globalPatterns: globalPatterns ?? this.globalPatterns,
+      allWordPatterns: allWordPatterns ?? this.allWordPatterns,
       error: error ?? this.error,
     );
   }
@@ -153,44 +169,89 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     state = const ReviewUiState(phase: ReviewPhase.loading);
     try {
       final memRepo = _ref.read(memoryStateRepositoryProvider);
+      final vocabRepo = _ref.read(vocabularyRepositoryProvider);
       final reviewRepo = _ref.read(reviewRepositoryProvider);
 
-      final dueStates = mode == 'all'
-          ? await memRepo.getAllForReview()
-          : await memRepo.getDueForReview();
-      if (dueStates.isEmpty) {
+      // 1. Get vocabulary items (optionally filtered by deck)
+      final allVocabItems = deckId != null
+          ? await vocabRepo.getByDeckId(deckId)
+          : await vocabRepo.getAll();
+      AppLogger.debug('Vocabulary items loaded', data: {'count': allVocabItems.length, 'deckId': deckId});
+
+      if (allVocabItems.isEmpty) {
+        AppLogger.warning('No vocabulary items found');
         state = const ReviewUiState(phase: ReviewPhase.empty);
         return;
       }
 
-      // Get all vocabulary items first
-      final vocabIds = dueStates.map((s) => s.vocabularyId).toList();
-      final session = await reviewRepo.createSession(vocabularyIds: vocabIds);
+      // 2. Parallel: get existing memory states IDs + global patterns + profile
+      final [existingVocabIds, globalPats, profile] = await Future.wait([
+        memRepo.getExistingVocabularyIds(),
+        _loadGlobalPatterns(),
+        _ref.read(profileProvider.future),
+      ]);
+      final nativeLang = (profile as dynamic)?.nativeLanguage ?? 'Korean';
 
-      // Apply all filters first: definition exists + deckId
-      var reviewable = session.vocabularyItems
-          .where((item) => item.definition != null)
+      // 3. Find vocabulary items without memory_states and create them
+      final vocabIdsWithoutState = allVocabItems
+          .where((v) => !(existingVocabIds as Set<String>).contains(v.id))
+          .map((v) => v.id)
           .toList();
 
-      if (deckId != null) {
-        reviewable = reviewable.where((item) => item.deckId == deckId).toList();
+      if (vocabIdsWithoutState.isNotEmpty) {
+        AppLogger.debug('Creating memory states', data: {'count': vocabIdsWithoutState.length});
+        await memRepo.createBatch(vocabularyIds: vocabIdsWithoutState);
       }
+
+      // 4. Get all memory states (existing + newly created)
+      final allStates = await (mode == 'all'
+          ? memRepo.getAllForReview()
+          : memRepo.getDueForReview());
+
+      AppLogger.debug('Memory states loaded', data: {'count': allStates.length});
+
+      if (allStates.isEmpty) {
+        AppLogger.warning('No memory states found for review');
+        state = const ReviewUiState(phase: ReviewPhase.empty);
+        return;
+      }
+
+      // 5. Reorder vocabulary items to match shuffled memory state order
+      final vocabById = {for (final v in allVocabItems) v.id: v};
+      var reviewable = allStates
+          .where((ms) => vocabById.containsKey(ms.vocabularyId))
+          .map((ms) => vocabById[ms.vocabularyId]!)
+          .toList();
+
+      AppLogger.debug('Reviewable vocabulary items ordered by memory states', data: {
+        'count': reviewable.length,
+        'first_10_words': reviewable.take(10).map((v) => v.word).toList(),
+      });
 
       if (reviewable.isEmpty) {
         state = const ReviewUiState(phase: ReviewPhase.empty);
         return;
       }
 
-      // THEN apply limit to the filtered list
+      // 6. Apply limit (already in priority order from memory state shuffle)
       final limitedReviewable = limit != null && limit < reviewable.length
           ? reviewable.take(limit).toList()
           : reviewable;
 
-      // Also limit the memory states to match
+      AppLogger.debug('Final limited reviewable', data: {
+        'count': limitedReviewable.length,
+        'first_10_words': limitedReviewable.take(10).map((v) => v.word).toList(),
+      });
+
+      // Build memory state map for limited items
       final limitedVocabIds = limitedReviewable.map((v) => v.id).toSet();
-      final limitedStates = dueStates
+      final limitedStates = allStates
           .where((ms) => limitedVocabIds.contains(ms.vocabularyId))
           .toList();
+
+      // 7. Create session
+      final vocabIds = limitedReviewable.map((v) => v.id).toList();
+      final session = await reviewRepo.createSession(vocabularyIds: vocabIds);
 
       final filteredSession = session.copyWith(
         vocabularyItems: limitedReviewable,
@@ -198,18 +259,23 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       );
       final stateMap = {for (final ms in limitedStates) ms.vocabularyId: ms};
 
-      // Load patterns for the first item
+      // 8. Preload patterns for ALL words in one batch query
+      final allVocabIdsForPatterns = limitedReviewable.map((v) => v.id).toList();
+      final patternsMap = await _loadAllWordPatterns(allVocabIdsForPatterns);
+
+      // Get patterns for the first item
       final firstItem = filteredSession.vocabularyItems.first;
-      final wordPats = await _loadWordPatterns(firstItem.id);
-      final globalPats = await _loadGlobalPatterns();
+      final wordPats = patternsMap[firstItem.id] ?? [];
 
       state = ReviewUiState(
         phase: ReviewPhase.showWord,
         session: filteredSession,
         memoryStates: stateMap,
         currentIndex: 0,
+        nativeLanguage: nativeLang as String,
         wordPatterns: wordPats,
-        globalPatterns: globalPats,
+        globalPatterns: globalPats as List<String>,
+        allWordPatterns: patternsMap,
       );
     } catch (e) {
       state = ReviewUiState(phase: ReviewPhase.error, error: e.toString());
@@ -218,10 +284,85 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
 
   // ── Public: user actions ───────────────────────────────────────────────────
 
-  /// Flip the card: showWord → meaningInput.
+  /// Flip the card: showWord → askKnowledge.
   void tapWord() {
     if (state.phase != ReviewPhase.showWord) return;
+    state = state.copyWith(phase: ReviewPhase.askKnowledge);
+  }
+
+  /// User says they know the word → proceed to meaning input.
+  void answerKnowWord() {
+    if (state.phase != ReviewPhase.askKnowledge) return;
     state = state.copyWith(phase: ReviewPhase.meaningInput);
+  }
+
+  /// User says they don't know the word → show explanation.
+  Future<void> answerDontKnowWord() async {
+    if (state.phase != ReviewPhase.askKnowledge) return;
+
+    final item = state.currentItem;
+    final memState = state.currentMemoryState;
+    final session = state.session;
+    if (item == null || memState == null || session == null) return;
+
+    // Check if explanation already exists
+    if (item.explanation != null && item.explanation!.isNotEmpty) {
+      // Use cached explanation
+      state = state.copyWith(phase: ReviewPhase.showExplanation);
+    } else {
+      // Generate explanation via AI
+      state = state.copyWith(phase: ReviewPhase.generatingExplanation);
+      await _generateAndCacheExplanation(item);
+    }
+
+    // Apply SM-2 penalty for not knowing (score = 0)
+    final memService = _ref.read(memoryServiceProvider);
+    final previousStrength = memState.memoryStrength;
+    final updatedMem = memService.applySmTwo(memState, 0.0);
+    await _ref.read(memoryStateRepositoryProvider).update(updatedMem);
+
+    // Save review result
+    final result = ReviewResult(
+      id: '',
+      userId: session.userId,
+      sessionId: session.id,
+      vocabularyId: item.id,
+      userAnswer: '',
+      answerType: 'skip',
+      questionType: 'knowledge',
+      questionContext: null,
+      aiEvaluation: const AiEvaluation(
+        meaningScore: 0.0,
+        usageScore: 0.0,
+        exampleScore: 0.0,
+        grammarScore: 0.0,
+        overallScore: 0.0,
+        feedback: 'User indicated they do not know this word',
+        detectedPatterns: [],
+      ),
+      previousMemoryStrength: previousStrength,
+      updatedMemoryStrength: updatedMem.memoryStrength,
+      reviewedAt: DateTime.now().toUtc(),
+    );
+
+    await _ref
+        .read(reviewRepositoryProvider)
+        .addResult(sessionId: session.id, result: result);
+
+    // Update state with new memory state
+    final updatedMap = Map<String, MemoryState>.from(state.memoryStates)
+      ..[item.id] = updatedMem;
+
+    state = state.copyWith(
+      memoryStates: updatedMap,
+      previousStrength: previousStrength,
+      updatedStrength: updatedMem.memoryStrength,
+    );
+  }
+
+  /// Called after viewing explanation to proceed to next word.
+  Future<void> nextAfterExplanation() async {
+    await nextWord();
   }
 
   /// Step 1: submit meaning answer.
@@ -237,8 +378,6 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     );
 
     try {
-      final profile = await _ref.read(profileProvider.future);
-      final nativeLanguage = profile?.nativeLanguage ?? 'Korean';
       final knownPatterns = [...state.wordPatterns, ...state.globalPatterns];
 
       final evaluation =
@@ -251,7 +390,7 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
                 answerType: 'text',
                 evalType: 'meaning',
                 knownPatterns: knownPatterns,
-                nativeLanguage: nativeLanguage,
+                nativeLanguage: state.nativeLanguage,
               );
 
       if (evaluation.overallScore < 0.6) {
@@ -305,8 +444,6 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     );
 
     try {
-      final profile = await _ref.read(profileProvider.future);
-      final nativeLanguage = profile?.nativeLanguage ?? 'Korean';
       final knownPatterns = [...state.wordPatterns, ...state.globalPatterns];
 
       final evaluation =
@@ -320,7 +457,7 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
                 evalType: 'translation',
                 questionContext: state.translationSentence,
                 knownPatterns: knownPatterns,
-                nativeLanguage: nativeLanguage,
+                nativeLanguage: state.nativeLanguage,
               );
 
       // Persist patterns from both steps
@@ -360,7 +497,10 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       state = current.copyWith(phase: ReviewPhase.complete);
     } else {
       final nextItem = session.vocabularyItems[nextIndex];
-      final wordPats = await _loadWordPatterns(nextItem.id);
+
+      // Optimistic UI update: show next word immediately
+      // Use preloaded patterns from allWordPatterns map
+      final wordPats = current.allWordPatterns[nextItem.id] ?? [];
 
       state = state.copyWith(
         phase: ReviewPhase.showWord,
@@ -373,11 +513,44 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
+  /// Generate explanation for a word and cache it in the database.
+  Future<void> _generateAndCacheExplanation(VocabularyItem item) async {
+    try {
+      final updatedItem = await _ref
+          .read(aiExplanationServiceProvider)
+          .generateExplanation(
+            vocabularyId: item.id,
+            word: item.word,
+            language: item.language,
+            nativeLanguage: state.nativeLanguage,
+          );
+
+      // Update the session with the new vocabulary item data
+      final session = state.session;
+      if (session != null) {
+        final updatedItems = session.vocabularyItems.map((v) {
+          return v.id == item.id ? updatedItem : v;
+        }).toList();
+
+        state = state.copyWith(
+          phase: ReviewPhase.showExplanation,
+          session: session.copyWith(vocabularyItems: updatedItems),
+        );
+      } else {
+        state = state.copyWith(phase: ReviewPhase.showExplanation);
+      }
+    } catch (e) {
+      // If generation fails, still show explanation view with available data
+      AppLogger.warning(
+        'Failed to generate explanation',
+        details: {'vocabularyId': item.id, 'error': e},
+      );
+      state = state.copyWith(phase: ReviewPhase.showExplanation);
+    }
+  }
+
   Future<void> _generateTranslation(VocabularyItem item) async {
     try {
-      final profile = await _ref.read(profileProvider.future);
-      final nativeLanguage = profile?.nativeLanguage ?? 'Korean';
-
       final question = await _ref
           .read(aiQuestionServiceProvider)
           .generateTranslationQuestion(
@@ -386,7 +559,7 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
             definition: item.definition!,
             usage: item.usage ?? '',
             examples: item.examples ?? [],
-            nativeLanguage: nativeLanguage,
+            nativeLanguage: state.nativeLanguage,
           );
 
       state = state.copyWith(
@@ -394,7 +567,14 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
         translationSentence: question.sentence,
         wordHint: question.wordHint,
       );
-    } catch (_) {
+    } catch (e, stackTrace) {
+      // Log translation generation failure
+      AppLogger.warning(
+        'Failed to generate translation question',
+        details: {'vocabularyId': item.id, 'word': item.word, 'error': e},
+      );
+      AppLogger.debug('Translation generation stack trace', data: stackTrace);
+
       // Generation failed — finalize using meaning-only score
       final item2 = state.currentItem;
       final memState2 = state.currentMemoryState;
@@ -525,14 +705,17 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     if (patterns.isEmpty) return;
     try {
       final repo = _ref.read(errorPatternRepositoryProvider);
-      await repo.upsertPatterns(
-        vocabularyId: vocabularyId,
-        patternTexts: patterns,
-      );
-      await repo.upsertPatterns(
-        vocabularyId: null,
-        patternTexts: patterns,
-      );
+      // Run both upsert operations in parallel
+      await Future.wait([
+        repo.upsertPatterns(
+          vocabularyId: vocabularyId,
+          patternTexts: patterns,
+        ),
+        repo.upsertPatterns(
+          vocabularyId: null,
+          patternTexts: patterns,
+        ),
+      ]);
     } catch (e, stackTrace) {
       AppLogger.warning(
         'Failed to persist error patterns',
@@ -542,19 +725,23 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     }
   }
 
-  Future<List<String>> _loadWordPatterns(String vocabularyId) async {
+  /// Load patterns for multiple words in one batch query
+  Future<Map<String, List<String>>> _loadAllWordPatterns(List<String> vocabularyIds) async {
     try {
-      final patterns = await _ref
+      final patternsMap = await _ref
           .read(errorPatternRepositoryProvider)
-          .getForWord(vocabularyId: vocabularyId);
-      return patterns.map((p) => p.patternText).toList();
+          .getForMultipleWords(vocabularyIds: vocabularyIds);
+
+      // Convert UserErrorPattern list to string list
+      return patternsMap.map((key, value) =>
+        MapEntry(key, value.map((p) => p.patternText).toList()));
     } catch (e, stackTrace) {
       AppLogger.warning(
-        'Failed to load word-specific error patterns',
-        details: {'vocabularyId': vocabularyId, 'error': e},
+        'Failed to load word patterns in batch',
+        details: {'vocabularyIds': vocabularyIds, 'error': e},
       );
-      AppLogger.debug('Word patterns loading stack trace', data: stackTrace);
-      return [];
+      AppLogger.debug('Batch patterns loading stack trace', data: stackTrace);
+      return {};
     }
   }
 
@@ -580,5 +767,9 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
 
 final reviewNotifierProvider =
     StateNotifierProvider<ReviewNotifier, ReviewUiState>(
-  (ref) => ReviewNotifier(ref),
+  (ref) {
+    // Keep provider alive during active review sessions
+    ref.keepAlive();
+    return ReviewNotifier(ref);
+  },
 );

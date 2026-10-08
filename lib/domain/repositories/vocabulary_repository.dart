@@ -2,6 +2,7 @@ import 'package:unebb/domain/models/vocabulary_item.dart';
 
 abstract interface class VocabularyRepository {
   Future<List<VocabularyItem>> getAll();
+  Future<List<VocabularyItem>> getByDeckId(String deckId);
   Future<VocabularyItem?> getById(String id);
   Future<VocabularyItem> create({
     required String word,

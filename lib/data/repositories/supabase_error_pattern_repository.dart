@@ -39,6 +39,37 @@ class SupabaseErrorPatternRepository implements ErrorPatternRepository {
   }
 
   @override
+  Future<Map<String, List<UserErrorPattern>>> getForMultipleWords({
+    required List<String> vocabularyIds,
+    int limit = 5,
+  }) async {
+    if (vocabularyIds.isEmpty) return {};
+
+    // Fetch all patterns for the given vocabulary IDs in one query
+    final rows = await _client
+        .from(_table)
+        .select()
+        .eq('user_id', _userId)
+        .inFilter('vocabulary_id', vocabularyIds)
+        .order('count', ascending: false);
+
+    // Group by vocabularyId and apply limit per word
+    final result = <String, List<UserErrorPattern>>{};
+    for (final row in rows) {
+      final pattern = UserErrorPattern.fromJson(row);
+      final vocabId = pattern.vocabularyId;
+      if (vocabId == null) continue;
+
+      result.putIfAbsent(vocabId, () => []);
+      if (result[vocabId]!.length < limit) {
+        result[vocabId]!.add(pattern);
+      }
+    }
+
+    return result;
+  }
+
+  @override
   Future<void> upsertPatterns({
     String? vocabularyId,
     required List<String> patternTexts,
@@ -47,20 +78,31 @@ class SupabaseErrorPatternRepository implements ErrorPatternRepository {
 
     final now = DateTime.now().toUtc().toIso8601String();
 
+    // Batch fetch: get all existing patterns in one query
+    final baseQuery = _client
+        .from(_table)
+        .select('id, pattern_text, count')
+        .eq('user_id', _userId)
+        .inFilter('pattern_text', patternTexts);
+
+    final existingRows = vocabularyId != null
+        ? await baseQuery.eq('vocabulary_id', vocabularyId)
+        : await baseQuery.isFilter('vocabulary_id', null);
+
+    // Build lookup map: pattern_text -> {id, count}
+    final existingMap = <String, Map<String, dynamic>>{};
+    for (final row in existingRows) {
+      existingMap[row['pattern_text'] as String] = row;
+    }
+
+    // Separate into inserts and updates
+    final toInsert = <Map<String, dynamic>>[];
+    final toUpdate = <Map<String, dynamic>>[];
+
     for (final text in patternTexts) {
-      // Check if this pattern already exists
-      final query = _client
-          .from(_table)
-          .select('id, count')
-          .eq('user_id', _userId)
-          .eq('pattern_text', text);
-
-      final existing = vocabularyId != null
-          ? await query.eq('vocabulary_id', vocabularyId).limit(1)
-          : await query.isFilter('vocabulary_id', null).limit(1);
-
-      if (existing.isEmpty) {
-        await _client.from(_table).insert({
+      final existing = existingMap[text];
+      if (existing == null) {
+        toInsert.add({
           'user_id': _userId,
           if (vocabularyId != null) 'vocabulary_id': vocabularyId,
           'pattern_text': text,
@@ -68,12 +110,22 @@ class SupabaseErrorPatternRepository implements ErrorPatternRepository {
           'last_seen_at': now,
         });
       } else {
-        final id = existing.first['id'] as String;
-        final count = (existing.first['count'] as int) + 1;
-        await _client
-            .from(_table)
-            .update({'count': count, 'last_seen_at': now}).eq('id', id);
+        toUpdate.add({
+          'id': existing['id'],
+          'count': (existing['count'] as int) + 1,
+          'last_seen_at': now,
+        });
       }
     }
+
+    // Execute batch operations in parallel
+    await Future.wait([
+      if (toInsert.isNotEmpty) _client.from(_table).insert(toInsert),
+      // Updates must be done individually (Supabase limitation), but in parallel
+      ...toUpdate.map((u) => _client
+          .from(_table)
+          .update({'count': u['count'], 'last_seen_at': u['last_seen_at']})
+          .eq('id', u['id'])),
+    ]);
   }
 }

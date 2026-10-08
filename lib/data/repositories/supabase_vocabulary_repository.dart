@@ -22,6 +22,17 @@ class SupabaseVocabularyRepository implements VocabularyRepository {
   }
 
   @override
+  Future<List<VocabularyItem>> getByDeckId(String deckId) async {
+    final rows = await _client
+        .from(_table)
+        .select()
+        .eq('user_id', _userId)
+        .eq('deck_id', deckId)
+        .order('created_at', ascending: false);
+    return rows.map((r) => VocabularyItem.fromJson(r)).toList();
+  }
+
+  @override
   Future<VocabularyItem?> getById(String id) async {
     final rows = await _client
         .from(_table)
