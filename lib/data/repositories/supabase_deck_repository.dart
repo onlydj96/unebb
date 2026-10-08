@@ -12,13 +12,81 @@ class SupabaseDeckRepository implements DeckRepository {
 
   @override
   Future<List<Deck>> getAll() async {
+    // Get all decks
     final rows = await _client
         .from('decks')
         .select()
-        .eq('user_id', _userId)
-        .order('created_at', ascending: false);
+        .eq('user_id', _userId);
 
-    return rows.map((row) => Deck.fromJson(row)).toList();
+    final decks = rows.map((row) => Deck.fromJson(row)).toList();
+
+    if (decks.isEmpty) return decks;
+
+    // Get most recent review for each deck via vocabulary_items
+    // review_results -> vocabulary_items -> deck_id
+    final reviewResults = await _client
+        .from('review_results')
+        .select('vocabulary_id, reviewed_at')
+        .eq('user_id', _userId)
+        .order('reviewed_at', ascending: false);
+
+    if (reviewResults.isEmpty) {
+      // No reviews yet, just sort by created_at
+      decks.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return decks;
+    }
+
+    // Get vocabulary_id to deck_id mapping
+    final vocabularyIds = reviewResults
+        .map((r) => r['vocabulary_id'] as String)
+        .toSet()
+        .toList();
+
+    final vocabularyItems = await _client
+        .from('vocabulary_items')
+        .select('id, deck_id')
+        .inFilter('id', vocabularyIds);
+
+    final vocabToDeckMap = <String, String>{};
+    for (final item in vocabularyItems) {
+      final vocabId = item['id'] as String;
+      final deckId = item['deck_id'] as String?;
+      if (deckId != null) {
+        vocabToDeckMap[vocabId] = deckId;
+      }
+    }
+
+    // Map deck_id to most recent review time
+    final deckLastReviewMap = <String, DateTime>{};
+    for (final result in reviewResults) {
+      final vocabId = result['vocabulary_id'] as String;
+      final deckId = vocabToDeckMap[vocabId];
+      if (deckId != null && !deckLastReviewMap.containsKey(deckId)) {
+        deckLastReviewMap[deckId] = DateTime.parse(result['reviewed_at'] as String);
+      }
+    }
+
+    // Sort: decks with reviews (by most recent review) → decks without reviews (by created_at)
+    decks.sort((a, b) {
+      final aLastReview = deckLastReviewMap[a.id];
+      final bLastReview = deckLastReviewMap[b.id];
+
+      // Both have reviews: sort by most recent review
+      if (aLastReview != null && bLastReview != null) {
+        return bLastReview.compareTo(aLastReview);
+      }
+
+      // Only a has review: a comes first
+      if (aLastReview != null) return -1;
+
+      // Only b has review: b comes first
+      if (bLastReview != null) return 1;
+
+      // Neither has review: sort by created_at (newest first)
+      return b.createdAt.compareTo(a.createdAt);
+    });
+
+    return decks;
   }
 
   @override

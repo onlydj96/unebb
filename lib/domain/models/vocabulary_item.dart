@@ -12,6 +12,7 @@ abstract class VocabularyItem with _$VocabularyItem {
     required String word,
     required String language,
     // AI-generated fields — null until generate-explanation runs
+    String? pronunciation,
     String? definition,
     String? explanation,
     String? usage,
