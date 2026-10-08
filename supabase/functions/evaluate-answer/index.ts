@@ -84,6 +84,24 @@ Scoring guidance:
 }
 
 function buildTranslationPrompt(body: RequestBody, nativeLanguage: string): string {
+  const wordCheckNote = body.language === "Japanese"
+    ? `
+🚨 JAPANESE LANGUAGE CRITICAL RULE 🚨
+Japanese does NOT use spaces between words. To check if "${body.word}" is used:
+1. Search for the exact kanji/hiragana characters "${body.word}" as a SUBSTRING anywhere in the sentence
+2. Examples for word "相手":
+   ✅ "相手がいる" - CORRECT (word + particle)
+   ✅ "相手を探す" - CORRECT (word + particle)
+   ✅ "相手と話す" - CORRECT (word + particle)
+   ✅ "相手に連絡" - CORRECT (word + particle)
+3. DO NOT look for word boundaries or spaces
+4. DO NOT require the word to be isolated
+5. If you find "${body.word}" as a substring, the learner HAS used the word
+
+IMPORTANT: Before evaluating, use Ctrl+F or substring search to verify "${body.word}" appears in "${body.user_answer}".
+If the characters "${body.word}" exist anywhere in the translation, the word IS used.`
+    : "";
+
   return `You are an expert ${body.language} teacher providing detailed, constructive feedback on a learner's translation.
 
 Original sentence (${nativeLanguage}): "${body.question_context}"
@@ -93,6 +111,7 @@ Learner's ${body.language} translation: "${body.user_answer}"
 
 The learner's native language is ${nativeLanguage}. ALL feedback and weak_point MUST be written in ${nativeLanguage}.
 ${buildKnownPatternsBlock(body.known_patterns)}
+${wordCheckNote}
 
 CRITICAL EVALUATION RULES:
 1. The target word/phrase "${body.word}" may be given in its base/infinitive form (e.g., "be subject to")
@@ -105,12 +124,17 @@ CRITICAL EVALUATION RULES:
 5. The learner deserves FULL credit if they use the target word/phrase with correct grammar
 
 Your task:
-1. Check if the learner used "${body.word}" (or its grammatically correct form) in their translation
+1. **FIRST**: Check if "${body.word}" appears in the translation "${body.user_answer}"
+   - For Japanese: Search for "${body.word}" as a SUBSTRING (不要空格檢查)
+   - For other languages: Check for the word or its grammatically correct conjugations
+   - If found: Proceed with evaluation
+   - If NOT found: Mark usage_score as 0.0-0.3 and provide example sentences
 2. Analyze the translation for meaning accuracy, word usage, grammar, and naturalness
 3. Provide SPECIFIC, DETAILED feedback on what works and what doesn't
 4. Explain grammatical errors with examples
 5. Suggest more natural alternatives when applicable
-6. CRITICAL: If the learner did NOT use "${body.word}" at all in their translation, you MUST provide example sentences that correctly use "${body.word}" in the feedback
+6. **ALWAYS provide an IDEAL/NATIVE-LIKE translation** at the end of the feedback
+7. CRITICAL: If the learner did NOT use "${body.word}" at all in their translation, you MUST provide example sentences that correctly use "${body.word}" in the feedback
 
 Return a JSON object with exactly these fields:
 {
@@ -127,7 +151,8 @@ Return a JSON object with exactly these fields:
     - Naturalness improvements (e.g., '어순: 영어에서는 "I was standing at a place adjacent to the building" 보다 "I stood next to the building" 또는 "I was standing in a spot adjacent to the building"이 더 자연스럽습니다')
     - **CRITICAL**: If the learner did NOT use "${body.word}" AT ALL (not even a conjugated form), provide 1-2 example sentences showing how to correctly use "${body.word}" in this context
       Example: '목표 단어 "${body.word}" 사용 예시: "I was standing in a spot adjacent to the building." 또는 "The cafe is adjacent to the library."'
-    - Provide a COMPLETE, corrected version of the sentence>",
+    - **MANDATORY**: ALWAYS end with: "✨ 이상적인 번역: [provide the most natural, native-like translation]"
+      Example: "✨ 이상적인 번역: I was standing next to the building." or "✨ 이상적인 번역: 相手に連絡を取った。">",
   "weak_point": "<ONE most important specific issue to focus on in ${nativeLanguage}, with concrete example and correction.
     Format: '[Category]: [Specific error] → [Correction]'
     Example: '관사 사용: "I was standing at place"에서 "a place" 또는 "the place"가 필요합니다'

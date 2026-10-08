@@ -10,6 +10,7 @@ interface RequestBody {
 }
 
 interface ExplanationResponse {
+  pronunciation: string;
   definition: string;
   explanation: string;
   usage: string;
@@ -24,11 +25,16 @@ Given a word and its language, generate educational content to help learners rem
 Return ONLY valid JSON — no markdown, no code fences, no extra text.`;
 
 function buildUserPrompt(word: string, language: string, nativeLanguage: string): string {
+  const pronunciationGuide = language === "Japanese"
+    ? "Hiragana reading (e.g. あいて for 相手)"
+    : "IPA phonetic transcription (e.g. /əˈbændən/ for English)";
+
   return `Generate learning content for the ${language} word: "${word}"
 The learner's native language is ${nativeLanguage}. Write explanations in ${nativeLanguage}.
 
 Return a JSON object with exactly these fields:
 {
+  "pronunciation": "${pronunciationGuide}",
   "definition": "Clear, concise definition in ${nativeLanguage} (1-2 sentences)",
   "explanation": "Explanation of nuance, origin, or context in ${nativeLanguage} (2-3 sentences)",
   "usage": "When and how to use this word in ${nativeLanguage} (1-2 sentences)",
@@ -119,6 +125,7 @@ Deno.serve(async (req: Request) => {
         Prefer: "return=representation",
       },
       body: JSON.stringify({
+        pronunciation: explanation.pronunciation,
         definition: explanation.definition,
         explanation: explanation.explanation,
         usage: explanation.usage,

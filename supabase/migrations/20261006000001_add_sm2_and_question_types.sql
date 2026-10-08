@@ -8,9 +8,15 @@ ALTER TABLE public.memory_states
   ADD COLUMN IF NOT EXISTS sm2_repetitions INTEGER NOT NULL DEFAULT 0;
 
 -- ease_factor must be >= 1.3 (SM-2 lower bound)
-ALTER TABLE public.memory_states
-  ADD CONSTRAINT IF NOT EXISTS ease_factor_min
-  CHECK (ease_factor >= 1.3);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'ease_factor_min'
+  ) THEN
+    ALTER TABLE public.memory_states
+      ADD CONSTRAINT ease_factor_min CHECK (ease_factor >= 1.3);
+  END IF;
+END $$;
 
 -- Question type tracking on review_results
 ALTER TABLE public.review_results
@@ -18,6 +24,12 @@ ALTER TABLE public.review_results
   ADD COLUMN IF NOT EXISTS question_context TEXT;
 
 -- question_type must be one of the supported types
-ALTER TABLE public.review_results
-  ADD CONSTRAINT IF NOT EXISTS question_type_valid
-  CHECK (question_type IN ('free_recall', 'translation'));
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'question_type_valid'
+  ) THEN
+    ALTER TABLE public.review_results
+      ADD CONSTRAINT question_type_valid CHECK (question_type IN ('free_recall', 'translation'));
+  END IF;
+END $$;
