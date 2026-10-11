@@ -77,19 +77,11 @@ class SupabaseMemoryStateRepository implements MemoryStateRepository {
     return _priorityShuffleWithWeights(states);
   }
 
-  // Calculate priority score (lower = higher priority)
+  // Calculate priority score for REVIEWED words only (lower = higher priority)
+  // Note: New words (reviewCount == 0) are handled separately and always come first
   double _calculatePriorityScore(MemoryState state) {
-    // NEW WORDS: Highest priority (score 0.0-0.3)
-    if (state.reviewCount == 0) {
-      // New words get high priority with slight randomization
-      // Small overdue penalty to prioritize older new words
-      final now = DateTime.now().toUtc();
-      final overdueDays = now.difference(state.nextReviewAt).inDays;
-      final overdueBoost = overdueDays > 0 ? overdueDays * 0.001 : 0.0; // Very small boost
-      return 0.15 - overdueBoost; // Score around 0.15 (high priority)
-    }
-
-    // REVIEWED WORDS: Base score from memory strength (0.0-1.0)
+    // Base score from memory strength (0.0-1.0)
+    // Low memory strength = low score = high priority
     double score = 1.0 - state.memoryStrength;
 
     // Heavy penalty for words with incorrect answers (makes them high priority)
@@ -109,11 +101,35 @@ class SupabaseMemoryStateRepository implements MemoryStateRepository {
   }
 
   // Priority-based weighted shuffle for diverse review order
+  // NEW WORDS (reviewCount == 0) are ALWAYS first, then priority-based shuffle
   List<MemoryState> _priorityShuffleWithWeights(List<MemoryState> states) {
     if (states.isEmpty) return states;
 
-    // Calculate priority scores for all states
-    final scored = states.map((state) {
+    final seedValue = DateTime.now().microsecondsSinceEpoch;
+    final random = Random(seedValue);
+
+    // STEP 1: Separate new words (never tested) from reviewed words
+    final newWords = <MemoryState>[];
+    final reviewedWords = <MemoryState>[];
+
+    for (final state in states) {
+      if (state.reviewCount == 0) {
+        newWords.add(state);
+      } else {
+        reviewedWords.add(state);
+      }
+    }
+
+    AppLogger.debug('Word separation', data: {
+      'newWords': newWords.length,
+      'reviewedWords': reviewedWords.length,
+    });
+
+    // STEP 2: Shuffle new words randomly (all equal priority)
+    newWords.shuffle(random);
+
+    // STEP 3: Calculate priority scores for reviewed words only
+    final scored = reviewedWords.map((state) {
       final priority = _calculatePriorityScore(state);
       return MapEntry(state, priority);
     }).toList();
@@ -121,85 +137,44 @@ class SupabaseMemoryStateRepository implements MemoryStateRepository {
     // Sort by priority first to establish base order
     scored.sort((a, b) => a.value.compareTo(b.value));
 
-    AppLogger.debug('Priority shuffle - Before grouping', data: {
-      'total': scored.length,
-      'first_5_scores': scored.take(5).map((e) => '${e.key.vocabularyId.substring(0, 8)}: ${e.value.toStringAsFixed(2)}').toList(),
-    });
-
-    // Group by priority tiers for weighted randomization
-    final result = <MemoryState>[];
-
-    // Split into priority groups
+    // STEP 4: Group reviewed words by priority tiers
     final highPriority = <MapEntry<MemoryState, double>>[];
     final mediumPriority = <MapEntry<MemoryState, double>>[];
     final lowPriority = <MapEntry<MemoryState, double>>[];
 
     for (final entry in scored) {
-      if (entry.value < 0.3) {
+      if (entry.value < 0.4) {
         highPriority.add(entry); // Urgent: struggled words, weak memory
-      } else if (entry.value < 0.6) {
+      } else if (entry.value < 0.7) {
         mediumPriority.add(entry); // Moderate: needs review
       } else {
         lowPriority.add(entry); // Low: relatively strong
       }
     }
 
-    AppLogger.debug('Priority groups', data: {
+    AppLogger.debug('Priority groups (reviewed only)', data: {
       'high': highPriority.length,
       'medium': mediumPriority.length,
       'low': lowPriority.length,
     });
 
-    // Shuffle within each group and interleave with weights
-    // Use microsecondsSinceEpoch to ensure different seed each time
-    final seedValue = DateTime.now().microsecondsSinceEpoch;
-    AppLogger.debug('Shuffle seed', data: {'seed': seedValue});
-
-    final random = Random(seedValue);
-
-    // Log before shuffle
-    if (mediumPriority.isNotEmpty) {
-      AppLogger.debug('Medium priority BEFORE shuffle', data: {
-        'first_5': mediumPriority.take(5).map((e) => e.key.vocabularyId.substring(0, 8)).toList(),
-      });
-    }
-
+    // Shuffle within each group
     highPriority.shuffle(random);
     mediumPriority.shuffle(random);
     lowPriority.shuffle(random);
 
-    // Log after shuffle
-    if (mediumPriority.isNotEmpty) {
-      AppLogger.debug('Medium priority AFTER shuffle', data: {
-        'first_5': mediumPriority.take(5).map((e) => e.key.vocabularyId.substring(0, 8)).toList(),
-      });
-    }
+    // STEP 5: Build final result - NEW WORDS FIRST, then priority-weighted reviewed words
+    final result = <MemoryState>[];
 
-    // Weighted random interleaving for better diversity
-    // Build a weighted pool where each group has probability based on its size
-    final allItems = <MapEntry<MemoryState, String>>[];
+    // Add all new words first (they are already shuffled)
+    result.addAll(newWords);
 
-    // Add all items with their priority tier as metadata
-    for (final entry in highPriority) {
-      allItems.add(MapEntry(entry.key, 'high'));
-    }
-    for (final entry in mediumPriority) {
-      allItems.add(MapEntry(entry.key, 'medium'));
-    }
-    for (final entry in lowPriority) {
-      allItems.add(MapEntry(entry.key, 'low'));
-    }
-
-    // Shuffle the entire pool for true randomization
-    allItems.shuffle(random);
-
-    // Now interleave based on weighted probabilities
+    // Then add reviewed words with weighted interleaving
     int hIdx = 0, mIdx = 0, lIdx = 0;
 
     while (hIdx < highPriority.length ||
            mIdx < mediumPriority.length ||
            lIdx < lowPriority.length) {
-      // Use random selection with weighted probability
       final dice = random.nextInt(100);
 
       // 60% chance for high priority (if available)
@@ -226,6 +201,7 @@ class SupabaseMemoryStateRepository implements MemoryStateRepository {
 
     AppLogger.debug('Final shuffled result', data: {
       'total': result.length,
+      'newWordsFirst': newWords.length,
       'first_10_vocab_ids': result.take(10).map((e) => e.vocabularyId.substring(0, 8)).toList(),
     });
 
