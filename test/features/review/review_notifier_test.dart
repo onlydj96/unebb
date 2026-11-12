@@ -209,6 +209,58 @@ void main() {
       expect(_state(c).phase, isNot(ReviewPhase.error));
     });
 
+    test('Japanese content without kanji readings is regenerated once',
+        () async {
+      final env = _Env(ids: ['a']);
+      // Imported word: 'ja' code, definition only, no kana reading.
+      env.vocabRepo.items[0] = vocab(
+        'a',
+        word: '人',
+        language: 'ja',
+        definition: '사람',
+        explanation: '사람',
+        pronunciation: '/hito/',
+      );
+      env.explanationService.pronunciation = 'ひと';
+      final c = await env.container();
+      final n = _notifier(c);
+
+      await n.startSession(mode: 'all'); // starts the refresh ahead of time
+      n.tapWord();
+      await n.answerDontKnowWord();
+
+      expect(_state(c).phase, ReviewPhase.showExplanation);
+      expect(_state(c).currentItem!.pronunciation, 'ひと');
+      expect(_state(c).currentItem!.definition, 'generated definition of 人');
+      expect(env.explanationService.calls, ['a']);
+    });
+
+    test('a failed reading refresh falls back to the existing content',
+        () async {
+      final env = _Env(ids: ['a']);
+      env.vocabRepo.items[0] = vocab(
+        'a',
+        word: '人',
+        language: 'Japanese',
+        definition: '사람',
+      );
+      env.explanationService.error = Exception('AI down');
+      final c = await env.container();
+      final n = _notifier(c);
+
+      await n.startSession(mode: 'all');
+      n.tapWord();
+      n.answerKnowWord();
+      await n.submitMeaning('사람');
+
+      expect(_state(c).phase, isNot(ReviewPhase.error));
+      final meaningCall = env.evalService.calls
+          .firstWhere((call) => call.evalType == 'meaning');
+      expect(meaningCall.definition, '사람');
+      // One attempt per word: no regeneration loop.
+      expect(env.explanationService.calls, ['a']);
+    });
+
     test('completing a session records how many words were reviewed', () async {
       final env = _Env(ids: ['a']);
       final c = await env.container();

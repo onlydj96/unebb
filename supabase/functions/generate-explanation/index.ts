@@ -1,6 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { isUuid, requireUser, textResponse } from "../_shared/auth.ts";
+import { kanaOnly, kanjiReadingRule } from "../_shared/japanese.ts";
+import { normalizeLanguage } from "../_shared/language.ts";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -26,20 +28,12 @@ const systemPrompt = `You are a vocabulary learning assistant.
 Given a word and its language, generate educational content to help learners remember and use it.
 Return ONLY valid JSON — no markdown, no code fences, no extra text.`;
 
-// Kanji are unreadable without their reading, so every Japanese word written
-// in kanji — in any field, including words quoted inside the native-language
-// explanation — carries its hiragana in parentheses.
-const japaneseReadingRule = `
-KANJI READING RULE (mandatory):
-Every time Japanese text containing kanji appears in ANY field (definition, explanation,
-usage, examples, synonyms, collocations, common_mistakes), write the hiragana reading in
-parentheses immediately after each kanji word: 漢字(ひらがな).
-- Annotate each kanji word separately; okurigana stays outside: 連絡(れんらく)を取(と)る
-- Words written only in hiragana or katakana get no annotation: ありがとう, コーヒー
-- Example sentence: 相手(あいて)に連絡(れんらく)を取(と)った。
-- Collocation: 決心(けっしん)をする
-- Japanese quoted inside native-language text: "相手(あいて)"는 대화나 행동의 대상이 되는 사람을 뜻합니다.
-The "pronunciation" field is the exception: it is the hiragana reading of the whole word only.
+// Every Japanese word written in kanji — in any field, including words quoted
+// inside the native-language explanation — carries its hiragana reading.
+const japaneseReadingRule = kanjiReadingRule([
+  "ANY field (definition, explanation, usage, examples, synonyms, collocations, common_mistakes)",
+]) +
+  `The "pronunciation" field is the exception: it is the hiragana reading of the whole word only.
 `;
 
 function buildUserPrompt(word: string, language: string, nativeLanguage: string): string {
@@ -124,7 +118,10 @@ Deno.serve(async (req: Request) => {
   const row = Array.isArray(rows) ? rows[0] : null;
   if (!row) return textResponse("Vocabulary item not found", 404);
 
-  // 3. Generate the content.
+  // 3. Generate the content. Imported words may carry an ISO code ("ja"),
+  //    which used to skip the Japanese rules (IPA instead of hiragana, no
+  //    kanji readings).
+  const language = normalizeLanguage(row.language);
   const openaiRes = await fetch(OPENAI_URL, {
     method: "POST",
     headers: {
@@ -137,7 +134,7 @@ Deno.serve(async (req: Request) => {
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: buildUserPrompt(row.word, row.language, nativeLanguage) },
+        { role: "user", content: buildUserPrompt(row.word, language, nativeLanguage) },
       ],
     }),
   });
@@ -161,8 +158,11 @@ Deno.serve(async (req: Request) => {
 
   // 4. Validate before persisting — a missing definition would leave the word
   //    unusable for reviews.
+  const pronunciation = asText(raw.pronunciation) ?? "";
   const explanation: ExplanationResponse = {
-    pronunciation: asText(raw.pronunciation) ?? "",
+    // The app tells refreshed Japanese content apart by a kana-only reading
+    // ("相手(あいて)" → "あいて").
+    pronunciation: language === "Japanese" ? kanaOnly(pronunciation) : pronunciation,
     definition: asText(raw.definition) ?? "",
     explanation: asText(raw.explanation) ?? "",
     usage: asText(raw.usage) ?? "",

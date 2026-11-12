@@ -14,6 +14,7 @@ import 'package:unebb/core/utils/logger.dart';
 import 'package:unebb/data/repositories/providers.dart';
 import 'package:unebb/domain/models/ai_evaluation.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
+import 'package:unebb/domain/models/word_reading.dart';
 import 'package:unebb/features/auth/providers/profile_provider.dart';
 import 'package:unebb/features/review/providers/review_providers.dart'
     show kPassScore;
@@ -250,7 +251,7 @@ class _WordAddedScreenState extends ConsumerState<WordAddedScreen> {
 
   Widget _buildExplanationView(AppLocalizations l10n, VocabularyItem item) {
     final ready = hasAiContent(item);
-    final pronunciation = item.pronunciation;
+    final pronunciation = item.displayReading;
 
     return _withActions(
       children: [
@@ -267,7 +268,7 @@ class _WordAddedScreenState extends ConsumerState<WordAddedScreen> {
         ),
         const SizedBox(height: 12),
         Text(item.word, style: AppTypography.displayLarge),
-        if (pronunciation != null && pronunciation.isNotEmpty) ...[
+        if (pronunciation != null) ...[
           const SizedBox(height: 6),
           Text(pronunciation, style: AppTypography.pronunciation),
         ],

@@ -27,24 +27,19 @@ class AppLocalizationsEn extends AppLocalizations {
   String get errorGeneric => 'Something went wrong. Please try again.';
 
   @override
-  String get errorNetwork =>
-      'No internet connection. Check your network and try again.';
+  String get errorNetwork => 'No internet connection. Check your network and try again.';
 
   @override
-  String get errorSessionExpired =>
-      'Your session has expired. Please sign in again.';
+  String get errorSessionExpired => 'Your session has expired. Please sign in again.';
 
   @override
-  String get errorAiUnavailable =>
-      'The AI service isn\'t responding right now. Please try again in a moment.';
+  String get errorAiUnavailable => 'The AI service isn\'t responding right now. Please try again in a moment.';
 
   @override
-  String get errorClockSync =>
-      'Your device clock is out of sync. Set date & time to automatic and try again.';
+  String get errorClockSync => 'Your device clock is out of sync. Set date & time to automatic and try again.';
 
   @override
-  String get errorRateLimited =>
-      'Too many requests. Please wait a moment and try again.';
+  String get errorRateLimited => 'Too many requests. Please wait a moment and try again.';
 
   @override
   String get offlineBanner => 'You\'re offline. Showing saved data.';
@@ -68,8 +63,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get dashboardGreeting => 'Ready to learn?';
 
   @override
-  String get dashboardSubtitle =>
-      'Review your vocabulary to strengthen your memory.';
+  String get dashboardSubtitle => 'Review your vocabulary to strengthen your memory.';
 
   @override
   String get startReview => 'Start Review';
@@ -178,8 +172,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get processing => 'Processing...';
 
   @override
-  String get voiceModeInitFailed =>
-      'Failed to initialize voice mode. Please check microphone permissions.';
+  String get voiceModeInitFailed => 'Failed to initialize voice mode. Please check microphone permissions.';
 
   @override
   String get speakNow => 'Speak now';
@@ -322,8 +315,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get allCaughtUp => 'All caught up!';
 
   @override
-  String get noDueWords =>
-      'No words are due for review right now.\nCome back later or add new words.';
+  String get noDueWords => 'No words are due for review right now.\nCome back later or add new words.';
 
   @override
   String get reviewAllInstead => 'Review all words';
@@ -352,8 +344,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get finish => 'Finish';
 
   @override
-  String get aiContentMissing =>
-      'The AI explanation for this word isn\'t available yet.';
+  String get aiContentMissing => 'The AI explanation for this word isn\'t available yet.';
 
   @override
   String get resumeSession => 'Resume Session';
@@ -379,8 +370,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get errorLoadingDecks => 'Couldn\'t load your decks.';
 
   @override
-  String get noDecksDescription =>
-      'Create your first deck to start organizing your vocabulary.';
+  String get noDecksDescription => 'Create your first deck to start organizing your vocabulary.';
 
   @override
   String get deleteDeckTitle => 'Delete deck?';
@@ -438,8 +428,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get allWords => 'All Words';
 
   @override
-  String get noWordsHint =>
-      'No words yet.\nAdd your first word to get started.';
+  String get noWordsHint => 'No words yet.\nAdd your first word to get started.';
 
   @override
   String get errorLoadingWords => 'Couldn\'t load your words.';
@@ -510,8 +499,7 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get duplicateWordErrorGeneral =>
-      'This word already exists in your vocabulary.';
+  String get duplicateWordErrorGeneral => 'This word already exists in your vocabulary.';
 
   @override
   String get tagline => 'Adaptive vocabulary learning';
@@ -538,8 +526,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get passwordTooShort => 'Password must be at least 6 characters';
 
   @override
-  String get checkEmailToConfirm =>
-      'Check your email and confirm your account, then sign in.';
+  String get checkEmailToConfirm => 'Check your email and confirm your account, then sign in.';
 
   @override
   String get invalidCredentials => 'Incorrect email or password.';
@@ -618,8 +605,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get addFirstWord => 'Add your first word to get started.';
 
   @override
-  String get addWordHelper =>
-      'AI writes the definition, examples and common mistakes for you.';
+  String get addWordHelper => 'AI writes the definition, examples and common mistakes for you.';
 
   @override
   String get answerIncorrect => 'Not quite';

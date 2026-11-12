@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { requireUser } from "../_shared/auth.ts";
+import { normalizeLanguage } from "../_shared/language.ts";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -34,6 +35,7 @@ ${exampleStr ? `Example sentences: "${exampleStr}"` : ""}
 
 Create a sentence in ${body.native_language} that naturally conveys the concept of "${body.word}".
 The sentence should make sense in everyday life and hint at the word's meaning without directly stating it.
+This is the question the learner answers: write it only in ${body.native_language} — no ${body.language} words and no readings or pronunciations.
 
 Return a JSON object:
 {
@@ -59,6 +61,7 @@ Deno.serve(async (req: Request) => {
     return new Response("Invalid JSON body", { status: 400 });
   }
 
+  body.language = normalizeLanguage(body.language);
   const { word, language, definition, native_language, question_type } = body;
   if (!word || !language || !definition || !native_language || !question_type) {
     return new Response("Missing required fields", { status: 400 });
@@ -109,7 +112,9 @@ Deno.serve(async (req: Request) => {
   const result: QuestionResponse = {
     question_type: "translation",
     sentence: typeof raw.sentence === "string" ? raw.sentence : "",
-    word_hint: typeof raw.word_hint === "string" ? raw.word_hint : word,
+    // Always the stored word: the model could echo it with the reading from
+    // the (annotated) examples, which would give the answer away.
+    word_hint: word,
   };
 
   if (!result.sentence) {

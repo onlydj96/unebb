@@ -15,6 +15,7 @@ import 'package:unebb/core/theme/app_typography.dart';
 import 'package:unebb/core/utils/error_messages.dart';
 import 'package:unebb/domain/models/ai_evaluation.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
+import 'package:unebb/domain/models/word_reading.dart';
 import 'package:unebb/features/review/providers/review_providers.dart';
 import 'package:unebb/features/review/providers/voice_mode_provider.dart';
 import 'package:unebb/features/review/widgets/voice_mode_widgets.dart';
@@ -670,7 +671,7 @@ class _ExplanationView extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final hasContent = item.definition?.isNotEmpty ?? false;
-    final pronunciation = item.pronunciation;
+    final pronunciation = item.displayReading;
 
     final sections = <(String, IconData, Color, Widget)>[
       if (item.definition?.isNotEmpty ?? false)
@@ -739,7 +740,7 @@ class _ExplanationView extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text(item.word, style: AppTypography.displayMedium),
-        if (pronunciation != null && pronunciation.isNotEmpty) ...[
+        if (pronunciation != null) ...[
           const SizedBox(height: AppSpacing.xs),
           Text(pronunciation, style: AppTypography.pronunciation),
         ],
@@ -856,6 +857,28 @@ class _BusyView extends StatelessWidget {
   }
 }
 
+/// Reading of the word, centred under it. Only used after the answer was
+/// given — on question screens the reading would give the answer away.
+class _ReadingLine extends StatelessWidget {
+  const _ReadingLine(this.item);
+
+  final VocabularyItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final reading = item.displayReading;
+    if (reading == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Text(
+        reading,
+        style: AppTypography.pronunciation,
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Meaning failed — show correct meaning + AI feedback
 // ---------------------------------------------------------------------------
@@ -893,6 +916,7 @@ class _MeaningFailedView extends StatelessWidget {
           style: AppTypography.displaySmall,
           textAlign: TextAlign.center,
         ),
+        _ReadingLine(item),
         const SizedBox(height: AppSpacing.lg),
         Container(
           padding: const EdgeInsets.all(AppSpacing.md + 2),
@@ -1110,6 +1134,7 @@ class _ResultView extends StatelessWidget {
           style: AppTypography.word,
           textAlign: TextAlign.center,
         ),
+        _ReadingLine(item),
         const SizedBox(height: AppSpacing.md),
         Center(
           child: MemoryStrengthDelta(

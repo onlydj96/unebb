@@ -36,8 +36,7 @@ class AppLocalizationsKo extends AppLocalizations {
   String get errorAiUnavailable => 'AI 서비스가 지금 응답하지 않습니다. 잠시 후 다시 시도해 주세요.';
 
   @override
-  String get errorClockSync =>
-      '기기 시간이 맞지 않습니다. 날짜 및 시간을 자동으로 설정한 뒤 다시 시도해 주세요.';
+  String get errorClockSync => '기기 시간이 맞지 않습니다. 날짜 및 시간을 자동으로 설정한 뒤 다시 시도해 주세요.';
 
   @override
   String get errorRateLimited => '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.';

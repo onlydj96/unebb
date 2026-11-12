@@ -34,6 +34,7 @@ VocabularyItem vocab(
   String? deckId,
   String? definition = 'a definition',
   String? explanation = 'an explanation',
+  String? pronunciation,
   String userId = kTestUserId,
   DateTime? createdAt,
 }) {
@@ -43,6 +44,7 @@ VocabularyItem vocab(
     deckId: deckId,
     word: word ?? 'word-$id',
     language: language,
+    pronunciation: pronunciation,
     definition: definition,
     explanation: explanation,
     usage: definition == null ? null : 'usage of ${word ?? id}',
@@ -457,6 +459,9 @@ class FakeAiExplanationService implements AiExplanationService {
   Object? error;
   Completer<void>? gate;
 
+  /// Pronunciation written by generated content (null keeps the current one).
+  String? pronunciation;
+
   @override
   Future<VocabularyItem> generateExplanation({
     required String vocabularyId,
@@ -469,6 +474,7 @@ class FakeAiExplanationService implements AiExplanationService {
     if (error != null) throw error!;
     final current = vocabRepo.items.firstWhere((v) => v.id == vocabularyId);
     final updated = current.copyWith(
+      pronunciation: pronunciation ?? current.pronunciation,
       definition: 'generated definition of $word',
       explanation: 'generated explanation of $word',
       usage: 'generated usage of $word',

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +11,7 @@ import 'package:unebb/core/theme/app_tone.dart';
 import 'package:unebb/core/theme/app_typography.dart';
 import 'package:unebb/core/utils/logger.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
+import 'package:unebb/domain/models/word_reading.dart';
 import 'package:unebb/features/vocabulary/providers/ai_content_provider.dart';
 import 'package:unebb/features/vocabulary/providers/vocabulary_providers.dart';
 import 'package:unebb/shared/utils/app_snackbar.dart';
@@ -107,17 +110,47 @@ class WordDetailScreen extends ConsumerWidget {
   }
 }
 
-class _WordDetailBody extends ConsumerWidget {
+class _WordDetailBody extends ConsumerStatefulWidget {
   const _WordDetailBody({required this.item});
 
   final VocabularyItem item;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_WordDetailBody> createState() => _WordDetailBodyState();
+}
+
+class _WordDetailBodyState extends ConsumerState<_WordDetailBody> {
+  @override
+  void initState() {
+    super.initState();
+    _refreshReadings();
+  }
+
+  @override
+  void didUpdateWidget(_WordDetailBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id) _refreshReadings();
+  }
+
+  /// Japanese content generated without kanji readings is regenerated in
+  /// the background; the new content replaces it when ready (at most once
+  /// per word, see [AiContentNotifier.ensureCurrent]).
+  void _refreshReadings() {
+    final item = widget.item;
+    if (!hasAiContent(item) || !item.lacksKanjiReadings) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(ref.read(aiContentProvider.notifier).ensureCurrent(item));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final l10n = context.l10n;
+    final item = widget.item;
     final memory =
         ref.watch(memoryStatesMapNotifierProvider).valueOrNull?[item.id];
-    final pronunciation = item.pronunciation;
+    final pronunciation = item.displayReading;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, AppSpacing.xxl),
@@ -127,7 +160,7 @@ class _WordDetailBody extends ConsumerWidget {
           TagPill(item.language, icon: Icons.translate_rounded),
           const SizedBox(height: 14),
           Text(item.word, style: AppTypography.displayLarge),
-          if (pronunciation != null && pronunciation.isNotEmpty) ...[
+          if (pronunciation != null) ...[
             const SizedBox(height: 6),
             Text(pronunciation, style: AppTypography.pronunciation),
           ],

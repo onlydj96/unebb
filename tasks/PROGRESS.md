@@ -234,6 +234,54 @@ tsc --strict (Edge Functions, Deno shim) → OK
 - `supabase functions deploy generate-explanation evaluate-answer generate-question`
 - Confirm the `evaluate-answer` model id (`gpt-5.6-luna`) exists for the account
 
+## Phase 15 — Japanese: kanji readings everywhere, word-usage check (2026-11-12)
+
+Reported: kanji in explanations/feedback came without readings, and a
+translation that contained the target kanji was graded "word not used".
+
+Root cause (verified on production data): 100 imported Japanese words are
+stored as `language = 'ja'` (also `en`, `es`), while the Edge Functions only
+recognised `"Japanese"`. For those words:
+- `evaluate-answer` used the alphabetic `\b…\b` regex, which can never match
+  kanji/kana → every answer was "NOT FOUND", and the prompt told the model
+  to "trust this verification completely" → feedback such as "목표 단어
+  「思う」는 사용되지 않은 것으로 처리" for the answer "…思う".
+- `generate-explanation` skipped the kanji reading rule and wrote IPA
+  (`/byōin/`) as the pronunciation; most imported words only had a
+  definition, so no reading was ever shown.
+
+- [x] `_shared/language.ts`: ISO codes → names in all three functions;
+      migration `20261112000001` renames stored codes (skips the one word
+      that already exists under the name: `adjacent`)
+- [x] `_shared/word_usage.ts`: Japanese check recognises inflections
+      (思う→思った, 働く→働いて, 高い→高かった, 勉強する→勉強した, 食べる/見る)
+      and ignores spacing/width/reading annotations; Unicode word boundaries
+      for alphabetic languages (`café`, `sí` never matched)
+- [x] A "not found" is no longer stated as fact: the model re-reads the
+      answer (other inflections, kana spelling) before calling the word missing
+- [x] `evaluate-answer`: feedback, weak_point and patterns annotate every
+      kanji word with its reading (shared `kanjiReadingRule`)
+- [x] `generate-question`: the question stays free of readings (`word_hint`
+      is always the stored word)
+- [x] App: Japanese content without a kana pronunciation is regenerated once
+      (review prefetch, "don't know", word detail; falls back to the old
+      content on failure); reading shown under the word on the "wrong
+      answer" and result screens; kana-only words no longer repeat
+      themselves; TTS/STT locale also for `ja`-coded words
+
+### Verification (2026-11-12)
+
+```
+flutter analyze        → No issues found
+flutter test           → 139/139 passed
+node --test supabase/functions/_shared/word_usage_test.ts → 9/9 passed
+tsc --strict (Edge Functions, Deno shim) → OK
+```
+
+### Follow-ups (need project access)
+- `supabase db push` for migration `20261112000001`
+- `supabase functions deploy evaluate-answer generate-explanation generate-question`
+
 ## Phase 14 — App logo (2026-11-12)
 
 New logo from `assets/logo/logo.svg` + `assets/logo/icon.png`.
@@ -251,10 +299,14 @@ New logo from `assets/logo/logo.svg` + `assets/logo/icon.png`.
       session-complete screen use the new mark
 - [x] Verified with rendered previews; `flutter analyze` clean,
       `flutter test` 132/132
+- [x] App icon redone without the logotype: symbol only, rendered from
+      `logo.svg` by `tool/generate_app_icons.py` (adaptive background now
+      `#FFFDFC`); dashboard app bar shows the logotype only and the review
+      hero card no longer carries the mark
 
 ### Follow-ups
 - Android/iOS native splash is still white (consider flutter_native_splash
-  with the mark on `#FDFAFA`)
+  with the mark on `#FFFDFC`)
 - Web / Windows / macOS icons are still the Flutter defaults
 
 ## Phase 13 — Visual redesign: "brand intersection" (2026-11-09)

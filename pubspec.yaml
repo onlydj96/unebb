@@ -79,15 +79,16 @@ dev_dependencies:
   # App icon generator
   flutter_launcher_icons: ^0.14.3
 
-# Sources are derived from the designer's assets/logo/icon.png (corners filled,
-# content fitted to the adaptive-icon safe zone). Regenerate with:
+# Sources are the text-free logo symbol rendered from assets/logo/logo.svg
+# (adaptive foreground fitted to the safe zone). Regenerate with:
+#   python tool/generate_app_icons.py
 #   dart run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/logo/app_icon.png"
   remove_alpha_ios: true
-  adaptive_icon_background: "#FDFAFA"
+  adaptive_icon_background: "#FFFDFC"
   adaptive_icon_foreground: "assets/logo/app_icon_foreground.png"
   adaptive_icon_monochrome: "assets/logo/app_icon_monochrome.png"
   # The foreground is already fitted to the safe zone; no extra inset.

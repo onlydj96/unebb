@@ -1,6 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { requireUser } from "../_shared/auth.ts";
+import { kanjiReadingRule } from "../_shared/japanese.ts";
+import { normalizeLanguage } from "../_shared/language.ts";
+import { checkWordUsage, type WordCheck } from "../_shared/word_usage.ts";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -42,13 +45,21 @@ function buildKnownPatternsBlock(patterns: string[] | undefined): string {
   return `Known recurring errors for this learner:\n${list}\nCheck whether any of these patterns recur.\n\n`;
 }
 
+// Feedback is never part of the question, so Japanese in it is always
+// annotated with readings.
+function readingRule(language: string): string {
+  return language === "Japanese"
+    ? kanjiReadingRule(['"feedback"', '"weak_point"', '"detected_patterns"'])
+    : "";
+}
+
 function buildMeaningPrompt(body: RequestBody, nativeLanguage: string): string {
   return `Check if the learner knows the meaning of the ${body.language} word: "${body.word}"
 
 Reference definition: "${body.definition}"
 Learner's answer: "${body.user_answer}"
 The learner's native language is ${nativeLanguage}. Write feedback and weak_point in ${nativeLanguage}.
-
+${readingRule(body.language)}
 This is a SIMPLE meaning check. The learner should provide a brief translation or definition.
 Be LENIENT - accept synonyms and paraphrases that capture the core meaning.
 
@@ -85,85 +96,24 @@ Scoring guidance:
 - 0.0–0.3: Fundamental misunderstanding`;
 }
 
-/**
- * Checks if the target word (or a variant) is present in the user's answer.
- * - For Japanese/Chinese/Korean: substring match (no word boundaries)
- * - For other languages: word boundary match with common conjugations
- */
-function checkWordUsage(word: string, userAnswer: string, language: string): { found: boolean; matchedForm: string | null } {
-  const answer = userAnswer.toLowerCase();
-  const targetWord = word.toLowerCase();
-
-  // For CJK languages, do simple substring match
-  if (["Japanese", "Chinese", "Korean"].includes(language)) {
-    if (answer.includes(targetWord)) {
-      return { found: true, matchedForm: word };
-    }
-    return { found: false, matchedForm: null };
+// A found word is certain and stated as fact. A miss is not: the search
+// cannot know every inflection or spelling, and stating it as fact made the
+// model tell learners that a word they had written was missing.
+function buildWordUsageNote(word: string, language: string, check: WordCheck): string {
+  if (check.found) {
+    return `
+✅ VERIFIED BY SYSTEM: The target word "${word}" WAS FOUND in the learner's translation (matched form: "${check.matchedForm}").
+Trust this verification. DO NOT claim the word is missing. The learner DID use the target word. Give appropriate credit for usage_score (at least 0.7).`;
   }
-
-  // For alphabetic languages, check word with boundaries
-  // First, try exact match
-  const wordBoundaryRegex = new RegExp(`\\b${targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-  if (wordBoundaryRegex.test(userAnswer)) {
-    return { found: true, matchedForm: word };
-  }
-
-  // For phrases like "be subject to", check each word
-  const wordParts = targetWord.split(/\s+/);
-  if (wordParts.length > 1) {
-    // Check if the main content words are present (skip "be", "a", "the", etc.)
-    const contentWords = wordParts.filter(w => !["be", "a", "an", "the", "to", "of", "in", "on", "at"].includes(w));
-    const allContentWordsFound = contentWords.every(cw => {
-      const cwRegex = new RegExp(`\\b${cw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
-      return cwRegex.test(userAnswer);
-    });
-    if (allContentWordsFound && contentWords.length > 0) {
-      return { found: true, matchedForm: contentWords.join(" ") };
-    }
-  }
-
-  // Check common verb conjugations
-  const verbEndings = ["s", "es", "ed", "ing", "er", "est", "ly"];
-  for (const ending of verbEndings) {
-    const conjugated = targetWord + ending;
-    const conjRegex = new RegExp(`\\b${conjugated.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-    if (conjRegex.test(userAnswer)) {
-      return { found: true, matchedForm: conjugated };
-    }
-  }
-
-  // Check irregular forms for common verbs
-  const irregularForms: Record<string, string[]> = {
-    "be": ["is", "am", "are", "was", "were", "been", "being"],
-    "have": ["has", "had", "having"],
-    "do": ["does", "did", "doing", "done"],
-    "go": ["goes", "went", "going", "gone"],
-  };
-
-  if (irregularForms[targetWord]) {
-    for (const form of irregularForms[targetWord]) {
-      const formRegex = new RegExp(`\\b${form}\\b`, 'i');
-      if (formRegex.test(userAnswer)) {
-        return { found: true, matchedForm: form };
-      }
-    }
-  }
-
-  return { found: false, matchedForm: null };
+  const isJapanese = language === "Japanese";
+  return `
+⚠️ SYSTEM CHECK: An automatic search did not find "${word}" (or a regular inflection of it) in the learner's translation.
+The search cannot recognise every form, so read the translation yourself before deciding:
+- If the learner wrote "${word}" in another inflected form${isJapanese ? " or spelled it in kana instead of kanji" : ""}, it counts as USED: give usage credit and DO NOT say the word is missing.${isJapanese ? " For a kana spelling, also show the kanji spelling." : ""}
+- Only if "${word}" is really absent (a synonym or a different word does NOT count): set usage_score to 0.0-0.3 and provide example sentences showing how to use "${word}" correctly.`;
 }
 
-function buildTranslationPrompt(body: RequestBody, nativeLanguage: string, wordCheckResult: { found: boolean; matchedForm: string | null }): string {
-  // Inform AI about the actual word check result
-  const wordVerificationNote = wordCheckResult.found
-    ? `
-✅ VERIFIED BY SYSTEM: The target word "${body.word}" WAS FOUND in the learner's translation (matched form: "${wordCheckResult.matchedForm}").
-DO NOT claim the word is missing. The learner DID use the target word. Give appropriate credit for usage_score (at least 0.7).`
-    : `
-❌ VERIFIED BY SYSTEM: The target word "${body.word}" was NOT FOUND in the learner's translation.
-The system performed an exact search and confirmed the word is missing. Set usage_score to 0.0-0.3.
-You MUST provide example sentences showing how to use "${body.word}" correctly.`;
-
+function buildTranslationPrompt(body: RequestBody, nativeLanguage: string, wordCheck: WordCheck): string {
   return `You are an expert ${body.language} teacher providing detailed, constructive feedback on a learner's translation.
 
 Original sentence (${nativeLanguage}): "${body.question_context}"
@@ -172,10 +122,9 @@ Word definition: "${body.definition}"
 Learner's ${body.language} translation: "${body.user_answer}"
 
 The learner's native language is ${nativeLanguage}. ALL feedback and weak_point MUST be written in ${nativeLanguage}.
+${readingRule(body.language)}
 ${buildKnownPatternsBlock(body.known_patterns)}
-${wordVerificationNote}
-
-CRITICAL: The system has ALREADY verified word usage above. Trust this verification completely.
+${buildWordUsageNote(body.word, body.language, wordCheck)}
 
 Your task:
 1. Analyze the translation for meaning accuracy, word usage, grammar, and naturalness
@@ -201,7 +150,7 @@ Return a JSON object with exactly these fields:
     - **CRITICAL**: If the learner did NOT use "${body.word}" AT ALL (not even a conjugated form), provide 1-2 example sentences showing how to correctly use "${body.word}" in this context
       Example: '목표 단어 "${body.word}" 사용 예시: "I was standing in a spot adjacent to the building." 또는 "The cafe is adjacent to the library."'
     - **MANDATORY**: ALWAYS end with: "✨ 이상적인 번역: [provide the most natural, native-like translation]"
-      Example: "✨ 이상적인 번역: I was standing next to the building." or "✨ 이상적인 번역: 相手に連絡を取った。">",
+      Example: "✨ 이상적인 번역: I was standing next to the building." or "✨ 이상적인 번역: 相手(あいて)に連絡(れんらく)を取(と)った。">",
   "weak_point": "<ONE most important specific issue to focus on in ${nativeLanguage}, with concrete example and correction.
     Format: '[Category]: [Specific error] → [Correction]'
     Example: '관사 사용: "I was standing at place"에서 "a place" 또는 "the place"가 필요합니다'
@@ -254,6 +203,8 @@ Deno.serve(async (req: Request) => {
     return new Response("Invalid JSON body", { status: 400 });
   }
 
+  // Words can be stored with ISO codes ("ja"); the rules below key on names.
+  body.language = normalizeLanguage(body.language);
   const { word, language, user_answer, answer_type } = body;
   if (!word || !language || !user_answer || !answer_type) {
     return new Response("Missing required fields", { status: 400 });
@@ -281,13 +232,12 @@ Deno.serve(async (req: Request) => {
 
   const nativeLanguage = body.native_language || "Korean";
 
-  // For translation evaluation, check word usage programmatically
-  const wordCheckResult = evalType === "translation"
-    ? checkWordUsage(word, user_answer, language)
-    : { found: true, matchedForm: null }; // Not relevant for meaning check
-
   const userPrompt = evalType === "translation"
-    ? buildTranslationPrompt(body, nativeLanguage, wordCheckResult)
+    ? buildTranslationPrompt(
+      body,
+      nativeLanguage,
+      checkWordUsage(word, user_answer, language),
+    )
     : buildMeaningPrompt(body, nativeLanguage);
 
   const openaiRes = await fetch(OPENAI_URL, {

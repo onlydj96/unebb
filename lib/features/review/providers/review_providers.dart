@@ -564,7 +564,8 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       userAnswer: '',
     );
 
-    if (hasAiContent(item) && (item.explanation?.isNotEmpty ?? false)) {
+    if (!needsAiContentUpdate(item) &&
+        (item.explanation?.isNotEmpty ?? false)) {
       _emit(state.copyWith(phase: ReviewPhase.showExplanation));
     } else {
       _emit(state.copyWith(phase: ReviewPhase.generatingExplanation));
@@ -804,11 +805,13 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     _retryAction = null;
   }
 
-  /// Returns [item] with AI content (generating it when missing) and keeps
-  /// the session copy in sync. Null when the content cannot be produced.
+  /// Returns [item] with AI content (generating it when missing, adding kanji
+  /// readings to older Japanese content) and keeps the session copy in sync.
+  /// Null when the content cannot be produced.
   Future<VocabularyItem?> _ensureContent(VocabularyItem item) async {
-    if (hasAiContent(item)) return item;
-    final ready = await _ref.read(aiContentProvider.notifier).ensure(item);
+    if (!needsAiContentUpdate(item)) return item;
+    final ready =
+        await _ref.read(aiContentProvider.notifier).ensureCurrent(item);
     // The screen may have closed while generating (often via _prepareAhead,
     // which does not await): reading `state` then would throw.
     if (ready == null || !mounted) return ready;
@@ -823,14 +826,14 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     return ready;
   }
 
-  /// Makes sure the current and the next two words have AI content before
-  /// the learner reaches them.
+  /// Makes sure the current and the next two words have up-to-date AI
+  /// content before the learner reaches them.
   void _prepareAhead() {
     final items = state.session?.vocabularyItems ?? const <VocabularyItem>[];
     for (var i = state.currentIndex;
         i < items.length && i <= state.currentIndex + 2;
         i++) {
-      if (!hasAiContent(items[i])) unawaited(_ensureContent(items[i]));
+      if (needsAiContentUpdate(items[i])) unawaited(_ensureContent(items[i]));
     }
   }
 

@@ -3,6 +3,8 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 
+import 'package:unebb/core/constants/languages.dart';
+
 /// Service for handling Text-to-Speech and Speech-to-Text operations
 class VoiceModeService {
   VoiceModeService();
@@ -113,7 +115,7 @@ class VoiceModeService {
       'Russian': 'ru-RU',
     };
 
-    final locale = localeMap[language] ?? 'en-US';
+    final locale = localeMap[SupportedLanguages.normalize(language)] ?? 'en-US';
     await _tts.setLanguage(locale);
   }
 
@@ -131,7 +133,7 @@ class VoiceModeService {
       'Italian': 'it_IT',
       'Russian': 'ru_RU',
     };
-    return localeMap[language] ?? 'en_US';
+    return localeMap[SupportedLanguages.normalize(language)] ?? 'en_US';
   }
 
   /// Speak text using TTS

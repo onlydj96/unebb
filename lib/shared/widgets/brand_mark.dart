@@ -256,7 +256,7 @@ class BrandWordmark extends StatelessWidget {
   }
 }
 
-/// The stacked logo: mark above the logotype, as on the app icon.
+/// The stacked logo: mark above the logotype, as in `assets/logo/logo.svg`.
 class BrandLockup extends StatelessWidget {
   const BrandLockup({super.key, this.markSize = 88});
 

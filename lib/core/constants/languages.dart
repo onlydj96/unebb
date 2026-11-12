@@ -35,4 +35,34 @@ abstract class SupportedLanguages {
 
   /// Default native language.
   static const String defaultNative = 'Korean';
+
+  static const String japanese = 'Japanese';
+
+  static const Map<String, String> _isoCodes = {
+    'en': 'English',
+    'es': 'Spanish',
+    'fr': 'French',
+    'de': 'German',
+    'ja': 'Japanese',
+    'jp': 'Japanese',
+    'zh': 'Chinese',
+    'ko': 'Korean',
+    'kr': 'Korean',
+    'it': 'Italian',
+    'pt': 'Portuguese',
+    'ru': 'Russian',
+  };
+
+  /// The app's name for [language], also when it is stored as an ISO code
+  /// ('ja', 'ja-JP' → 'Japanese'). Unknown values are returned trimmed.
+  static String normalize(String language) {
+    final value = language.trim();
+    final key = value.toLowerCase();
+    for (final name in learning) {
+      if (name.toLowerCase() == key) return name;
+    }
+    return _isoCodes[key] ??
+        _isoCodes[key.split(RegExp('[-_]')).first] ??
+        value;
+  }
 }

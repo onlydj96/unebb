@@ -55,7 +55,7 @@ class DashboardScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const BrandWordmark(fontSize: 22),
+        title: const BrandWordmark(fontSize: 22, showMark: false),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout_rounded),
@@ -164,74 +164,61 @@ class _ReviewHero extends StatelessWidget {
         onTap: onStart,
         splashColor: AppColors.paper.withValues(alpha: 0.08),
         highlightColor: AppColors.paper.withValues(alpha: 0.04),
-        child: Stack(
-          children: [
-            // The logo, inverted for the dark card.
-            const Positioned(
-              right: 20,
-              bottom: 18,
-              child: BrandMark(size: 72, onDark: true),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(AppSpacing.lg),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SectionLabel(l10n.review, color: AppColors.mint),
-                  const SizedBox(height: AppSpacing.md),
-                  if (due == null)
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SectionLabel(l10n.review, color: AppColors.mint),
+              const SizedBox(height: AppSpacing.md),
+              if (due == null)
+                Text(
+                  '–',
+                  style: AppTypography.displayLarge.copyWith(
+                    color: AppColors.textOnDark,
+                  ),
+                )
+              else if (due > 0)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
                     Text(
-                      '–',
+                      '$due',
                       style: AppTypography.displayLarge.copyWith(
                         color: AppColors.textOnDark,
-                      ),
-                    )
-                  else if (due > 0)
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.baseline,
-                      textBaseline: TextBaseline.alphabetic,
-                      children: [
-                        Text(
-                          '$due',
-                          style: AppTypography.displayLarge.copyWith(
-                            color: AppColors.textOnDark,
-                            fontSize: 56,
-                            height: 1,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Flexible(
-                          child: Text(l10n.dueNowLabel(due), style: onDark),
-                        ),
-                      ],
-                    )
-                  else
-                    Padding(
-                      padding: const EdgeInsets.only(right: 48),
-                      child: Text(
-                        l10n.nothingDue,
-                        style: AppTypography.headingSmall.copyWith(
-                          color: AppColors.textOnDark,
-                        ),
+                        fontSize: 56,
+                        height: 1,
                       ),
                     ),
-                  const SizedBox(height: AppSpacing.lg),
-                  FilledButton.icon(
-                    onPressed: onStart,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.paper,
-                      foregroundColor: AppColors.cocoa,
-                      iconColor: AppColors.cocoa,
-                      minimumSize: const Size(0, 48),
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(l10n.dueNowLabel(due), style: onDark),
                     ),
-                    icon: const Icon(Icons.play_arrow_rounded),
-                    label: Text(l10n.startReview),
+                  ],
+                )
+              else
+                Text(
+                  l10n.nothingDue,
+                  style: AppTypography.headingSmall.copyWith(
+                    color: AppColors.textOnDark,
                   ),
-                ],
+                ),
+              const SizedBox(height: AppSpacing.lg),
+              FilledButton.icon(
+                onPressed: onStart,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.paper,
+                  foregroundColor: AppColors.cocoa,
+                  iconColor: AppColors.cocoa,
+                  minimumSize: const Size(0, 48),
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                ),
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: Text(l10n.startReview),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
