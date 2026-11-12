@@ -16,10 +16,3 @@ final isOnlineProvider = Provider<bool>((ref) {
     orElse: () => true, // Assume online if unknown
   );
 });
-
-/// Provider for one-time connectivity check
-final connectivityCheckProvider = FutureProvider<List<ConnectivityResult>>(
-  (ref) async {
-    return await Connectivity().checkConnectivity();
-  },
-);

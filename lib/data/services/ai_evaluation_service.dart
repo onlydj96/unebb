@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:unebb/domain/models/ai_evaluation.dart';
@@ -9,6 +11,7 @@ class AiEvaluationService {
   final SupabaseClient _client;
 
   static const _function = 'evaluate-answer';
+  static const _timeout = Duration(seconds: 30);
 
   Future<AiEvaluation> evaluateAnswer({
     required String word,
@@ -18,9 +21,9 @@ class AiEvaluationService {
     required String userAnswer,
     required String answerType,
     String evalType = 'meaning', // 'meaning' | 'translation'
-    String? questionContext,     // Korean sentence for translation eval
+    String? questionContext, // Korean sentence for translation eval
     List<String> knownPatterns = const [],
-    String? nativeLanguage,      // Learner's native language
+    String? nativeLanguage, // Learner's native language
   }) async {
     final response = await _client.functions.invoke(
       _function,
@@ -36,6 +39,12 @@ class AiEvaluationService {
         if (knownPatterns.isNotEmpty) 'known_patterns': knownPatterns,
         if (nativeLanguage != null) 'native_language': nativeLanguage,
       },
+    ).timeout(
+      _timeout,
+      onTimeout: () => throw TimeoutException(
+        'AI evaluation timed out after ${_timeout.inSeconds}s',
+        _timeout,
+      ),
     );
 
     if (response.status != 200) {

@@ -6,14 +6,30 @@ final authStateChangesProvider = StreamProvider<AuthState>((ref) {
   return Supabase.instance.client.auth.onAuthStateChange;
 });
 
+/// Reads gotrue's signed-in user (overridable in tests).
+final authClientUserProvider = Provider<User? Function()>(
+  (ref) => () => Supabase.instance.client.auth.currentUser,
+);
+
 /// Convenience provider for the currently signed-in user, or null when signed out.
+///
+/// gotrue's `currentUser` is the source of truth; the auth stream is only
+/// watched to recompute on every event. When an offline token refresh fails,
+/// gotrue emits an *error* on the stream but keeps the session — mapping that
+/// error to "signed out" used to wipe the cache and send the user to the
+/// first-run profile screen.
 final currentUserProvider = Provider<User?>((ref) {
-  final authAsync = ref.watch(authStateChangesProvider);
-  return authAsync.when(
-    data: (state) => state.session?.user,
-    loading: () => Supabase.instance.client.auth.currentUser,
-    error: (_, __) => null,
-  );
+  ref.watch(authStateChangesProvider);
+  return ref.watch(authClientUserProvider)();
+});
+
+/// ID of the signed-in user, or null when signed out.
+///
+/// User-scoped providers watch this so they rebuild (and drop the previous
+/// user's data) whenever the account changes. Token refreshes keep the same
+/// id, so they do not trigger rebuilds.
+final currentUserIdProvider = Provider<String?>((ref) {
+  return ref.watch(currentUserProvider)?.id;
 });
 
 // ---------------------------------------------------------------------------

@@ -1,20 +1,31 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 
+import 'package:unebb/core/l10n/l10n.dart';
+import 'package:unebb/core/services/cache_service.dart';
 import 'package:unebb/core/theme/app_colors.dart';
 import 'package:unebb/core/theme/app_radius.dart';
 import 'package:unebb/core/theme/app_spacing.dart';
+import 'package:unebb/core/theme/app_theme.dart';
+import 'package:unebb/core/theme/app_tone.dart';
 import 'package:unebb/core/theme/app_typography.dart';
+import 'package:unebb/core/utils/error_messages.dart';
 import 'package:unebb/domain/models/ai_evaluation.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
-import 'package:unebb/features/auth/providers/profile_provider.dart';
 import 'package:unebb/features/review/providers/review_providers.dart';
 import 'package:unebb/features/review/providers/voice_mode_provider.dart';
 import 'package:unebb/features/review/widgets/voice_mode_widgets.dart';
+import 'package:unebb/shared/widgets/app_empty_state.dart';
+import 'package:unebb/shared/widgets/brand_mark.dart';
 import 'package:unebb/shared/widgets/feedback_card.dart';
+import 'package:unebb/shared/widgets/labels.dart';
 import 'package:unebb/shared/widgets/memory_indicator.dart';
+import 'package:unebb/shared/widgets/phase_switcher.dart';
+import 'package:unebb/shared/widgets/score_ring.dart';
+import 'package:unebb/shared/widgets/word_content.dart';
 
 class ReviewScreen extends ConsumerStatefulWidget {
   const ReviewScreen({super.key, this.mode = 'due', this.limit, this.deckId});
@@ -27,132 +38,275 @@ class ReviewScreen extends ConsumerStatefulWidget {
   ConsumerState<ReviewScreen> createState() => _ReviewScreenState();
 }
 
-class _ReviewScreenState extends ConsumerState<ReviewScreen> {
+class _ReviewScreenState extends ConsumerState<ReviewScreen>
+    with WidgetsBindingObserver {
   final _answerController = TextEditingController();
+  bool _hasCheckedSavedProgress = false;
+
+  /// Captured up front: `ref` cannot be used inside [dispose] (the element
+  /// is already unmounted), which made the old "save progress on close"
+  /// throw every time and skip the rest of dispose.
+  late final ReviewNotifier _notifier;
 
   @override
   void initState() {
     super.initState();
+    _notifier = ref.read(reviewNotifierProvider.notifier);
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(reviewNotifierProvider.notifier).startSession(
-            mode: widget.mode,
-            limit: widget.limit,
-            deckId: widget.deckId,
-          );
+      if (mounted) _checkForSavedProgress();
     });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // Save progress when the user closes the screen mid-session.
+    _notifier.saveProgress();
     _answerController.dispose();
     super.dispose();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _notifier.saveProgress();
+    }
+  }
+
+  Future<void> _checkForSavedProgress() async {
+    if (_hasCheckedSavedProgress) return;
+    _hasCheckedSavedProgress = true;
+
+    final notifier = _notifier;
+    final savedProgress = notifier.getSavedProgress(
+      mode: widget.mode,
+      limit: widget.limit,
+      deckId: widget.deckId,
+    );
+
+    if (savedProgress != null && savedProgress.completedCount > 0) {
+      final shouldResume = await _showResumeDialog(savedProgress);
+      if (!mounted) return;
+      if (shouldResume == null) {
+        // Dismissed (e.g. Android back): leave and keep the saved progress
+        // instead of treating it as "start new" and deleting it.
+        _close();
+        return;
+      }
+      if (shouldResume) {
+        await notifier.resumeSession(savedProgress);
+        return;
+      }
+      await notifier.clearSavedProgress();
+    }
+    await notifier.startSession(
+      mode: widget.mode,
+      limit: widget.limit,
+      deckId: widget.deckId,
+    );
+  }
+
+  Future<bool?> _showResumeDialog(ReviewSessionProgress progress) {
+    final l10n = context.l10n;
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.resumeSessionTitle),
+        content: Text(
+          l10n.resumeSessionMessage(
+            progress.remainingCount,
+            progress.completedCount,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(l10n.startNewSession),
+          ),
+          FilledButton(
+            style: AppTheme.compactButton,
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(l10n.continueSession),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _close() {
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go('/');
+    }
+  }
+
+  void _submit(ValueChanged<String> action) {
+    final answer = _answerController.text.trim();
+    if (answer.isEmpty) return;
+    _answerController.clear();
+    action(answer);
+  }
+
+  static const _outsideSession = {
+    ReviewPhase.loading,
+    ReviewPhase.empty,
+    ReviewPhase.complete,
+  };
+
+  bool _inSession(ReviewUiState state) =>
+      state.session != null && !_outsideSession.contains(state.phase);
+
+  @override
   Widget build(BuildContext context) {
     final state = ref.watch(reviewNotifierProvider);
+    final voiceEnabled =
+        ref.watch(voiceModeProvider.select((s) => s.isEnabled));
+    final l10n = context.l10n;
+    final notifier = _notifier;
+    final item = state.currentItem;
 
     return Scaffold(
       appBar: AppBar(
         title: _buildTitle(state),
+        centerTitle: true,
         leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: () => context.pop(),
+          icon: const Icon(Icons.close_rounded),
+          tooltip: l10n.back,
+          onPressed: _close,
         ),
-        actions: const [
-          VoiceModeToggle(),
-          SizedBox(width: 8),
-        ],
+        actions: const [VoiceModeToggle(), SizedBox(width: AppSpacing.sm)],
+        bottom: _inSession(state)
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(14),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: _SessionProgressBar(progress: state.sessionProgress),
+                ),
+              )
+            : null,
       ),
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 250),
+        switchInCurve: Curves.easeOutCubic,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween(
+              begin: const Offset(0, 0.03),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        ),
+        // Views fading out ignore taps (a second tap on the old "Next word"
+        // button used to skip a word) without being remounted.
+        layoutBuilder: PhaseSwitcher.layoutBuilder,
         child: KeyedSubtree(
-          key: ValueKey('${state.phase}-${state.currentIndex}'),
+          key: ValueKey('${state.phase}-${state.currentIndex}-$voiceEnabled'),
           child: switch (state.phase) {
-            ReviewPhase.loading => const Center(
-                child: CircularProgressIndicator(),
-              ),
+            ReviewPhase.loading => const _BusyView(word: '', message: ''),
             ReviewPhase.empty => _EmptyView(
-                onBack: () => context.pop(),
+                onBack: _close,
+                onReviewAll: state.sessionMode == 'due'
+                    ? () => notifier.startSession(
+                          mode: 'all',
+                          limit: state.sessionLimit,
+                          deckId: state.sessionDeckId,
+                        )
+                    : null,
               ),
-            ReviewPhase.showWord => _buildShowWordView(
-                context,
-                ref,
-                state,
+            ReviewPhase.showWord ||
+            ReviewPhase.askKnowledge when voiceEnabled && item != null =>
+              _VoiceShowWordView(item: item),
+            ReviewPhase.showWord when item != null => _FlashCardFront(
+                item: item,
+                onTap: notifier.tapWord,
               ),
-            ReviewPhase.askKnowledge => _buildAskKnowledgeView(
-                context,
-                ref,
-                state,
+            ReviewPhase.askKnowledge when item != null => _AskKnowledgeView(
+                item: item,
+                onKnow: notifier.answerKnowWord,
+                onDontKnow: notifier.answerDontKnowWord,
               ),
             ReviewPhase.generatingExplanation => _BusyView(
-                word: state.currentItem?.word ?? '',
-                message: AppLocalizations.of(context)!.generatingExplanation,
+                word: item?.word ?? '',
+                message: l10n.generatingExplanation,
               ),
-            ReviewPhase.showExplanation => _ExplanationView(
-                item: state.currentItem!,
-                currentIndex: state.currentIndex,
-                totalItems: state.totalItems,
-                onNext: () =>
-                    ref.read(reviewNotifierProvider.notifier).nextAfterExplanation(),
+            ReviewPhase.showExplanation when item != null => _ExplanationView(
+                item: item,
+                onNext: notifier.nextAfterExplanation,
               ),
-            ReviewPhase.meaningInput => _MeaningInputView(
-                item: state.currentItem!,
-                currentIndex: state.currentIndex,
-                totalItems: state.totalItems,
+            ReviewPhase.meaningInput when item != null => _MeaningInputView(
+                item: item,
                 controller: _answerController,
-                onSubmit: (answer) {
-                  _answerController.clear();
-                  ref
-                      .read(reviewNotifierProvider.notifier)
-                      .submitMeaning(answer);
-                },
+                onSubmit: () => _submit(notifier.submitMeaning),
               ),
             ReviewPhase.evaluatingMeaning => _BusyView(
-                word: state.currentItem?.word ?? '',
-                message: AppLocalizations.of(context)!.checkingYourAnswer,
+                word: item?.word ?? '',
+                message: l10n.checkingYourAnswer,
               ),
-            ReviewPhase.meaningFailed => _MeaningFailedView(
-                item: state.currentItem!,
+            ReviewPhase.meaningFailed
+                when item != null && state.meaningEvaluation != null =>
+              _MeaningFailedView(
+                item: item,
                 evaluation: state.meaningEvaluation!,
-                onNext: () =>
-                    ref.read(reviewNotifierProvider.notifier).nextAfterFailed(),
+                onNext: notifier.nextAfterFailed,
               ),
             ReviewPhase.generatingTranslation => _BusyView(
-                word: state.currentItem?.word ?? '',
-                message: AppLocalizations.of(context)!.preparingTranslationExercise,
+                word: item?.word ?? '',
+                message: l10n.preparingTranslationExercise,
               ),
-            ReviewPhase.translationInput => _buildTranslationInputView(
-                context,
-                ref,
-                state,
+            ReviewPhase.translationInput when voiceEnabled && item != null =>
+              _VoiceTranslationInputView(
+                item: item,
+                sentence: state.translationSentence ?? '',
+                wordHint: state.wordHint,
+              ),
+            ReviewPhase.translationInput when item != null =>
+              _TranslationInputView(
+                item: item,
+                sentence: state.translationSentence ?? '',
+                wordHint: state.wordHint,
+                controller: _answerController,
+                onSubmit: () => _submit(notifier.submitTranslation),
               ),
             ReviewPhase.evaluatingTranslation => _BusyView(
-                word: state.currentItem?.word ?? '',
-                message: AppLocalizations.of(context)!.evaluatingYourTranslation,
+                word: item?.word ?? '',
+                message: l10n.evaluatingYourTranslation,
               ),
-            ReviewPhase.showResult => _ResultView(
-                item: state.currentItem!,
+            ReviewPhase.showResult
+                when item != null && state.meaningEvaluation != null =>
+              _ResultView(
+                item: item,
                 meaningEvaluation: state.meaningEvaluation!,
                 translationEvaluation: state.translationEvaluation,
+                combinedScore: state.combinedScore ??
+                    state.meaningEvaluation!.overallScore,
                 detectedPatterns: state.allDetectedPatterns,
                 previousStrength: state.previousStrength,
                 updatedStrength: state.updatedStrength,
-                currentIndex: state.currentIndex,
-                totalItems: state.totalItems,
-                onNext: () =>
-                    ref.read(reviewNotifierProvider.notifier).nextWord(),
+                isLast: state.currentIndex + 1 >= state.totalItems,
+                onNext: notifier.nextWord,
               ),
             ReviewPhase.complete => _CompleteView(
-                correctCount: state.correctCount,
-                totalItems: state.totalItems,
-                onDone: () => context.pop(),
+                correctCount: state.sessionCorrectCount,
+                totalItems: state.sessionTotalCount,
+                onDone: _close,
               ),
             ReviewPhase.error => _ErrorView(
-                message: state.error ?? 'An error occurred.',
-                onRetry: () =>
-                    ref.read(reviewNotifierProvider.notifier).startSession(),
+                message: state.error == null
+                    ? l10n.errorGeneric
+                    : friendlyErrorMessage(l10n, state.error!),
+                onRetry: notifier.retry,
+                onSkip: state.canRetryStep ? notifier.nextWord : null,
               ),
+            // A word-dependent phase without a word cannot be shown.
+            _ => const _BusyView(word: '', message: ''),
           },
         ),
       ),
@@ -160,203 +314,159 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   }
 
   Widget _buildTitle(ReviewUiState state) {
-    const activePhases = {
-      ReviewPhase.showWord,
-      ReviewPhase.askKnowledge,
-      ReviewPhase.generatingExplanation,
-      ReviewPhase.showExplanation,
-      ReviewPhase.meaningInput,
-      ReviewPhase.evaluatingMeaning,
-      ReviewPhase.meaningFailed,
-      ReviewPhase.generatingTranslation,
-      ReviewPhase.translationInput,
-      ReviewPhase.evaluatingTranslation,
-      ReviewPhase.showResult,
-    };
-    if (activePhases.contains(state.phase)) {
-      return Text(
-        '${state.currentIndex + 1} / ${state.totalItems}',
-        style: AppTypography.headingSmall,
-      );
+    if (!_inSession(state)) {
+      return Text(context.l10n.review);
     }
-    return Text(AppLocalizations.of(context)!.review);
-  }
-
-  Widget _buildShowWordView(
-    BuildContext context,
-    WidgetRef ref,
-    ReviewUiState state,
-  ) {
-    final voiceState = ref.watch(voiceModeProvider);
-    final item = state.currentItem!;
-
-    if (voiceState.isEnabled) {
-      return _VoiceShowWordView(
-        item: item,
-        currentIndex: state.currentIndex,
-        totalItems: state.totalItems,
-      );
-    }
-
-    return _FlashCardFront(
-      item: item,
-      currentIndex: state.currentIndex,
-      totalItems: state.totalItems,
-      onTap: () => ref.read(reviewNotifierProvider.notifier).tapWord(),
-    );
-  }
-
-  Widget _buildTranslationInputView(
-    BuildContext context,
-    WidgetRef ref,
-    ReviewUiState state,
-  ) {
-    final voiceState = ref.watch(voiceModeProvider);
-    final item = state.currentItem!;
-
-    if (voiceState.isEnabled) {
-      return _VoiceTranslationInputView(
-        item: item,
-        sentence: state.translationSentence ?? '',
-        wordHint: state.wordHint,
-        currentIndex: state.currentIndex,
-        totalItems: state.totalItems,
-      );
-    }
-
-    return _TranslationInputView(
-      item: item,
-      sentence: state.translationSentence ?? '',
-      wordHint: state.wordHint,
-      currentIndex: state.currentIndex,
-      totalItems: state.totalItems,
-      controller: _answerController,
-      onSubmit: (answer) {
-        _answerController.clear();
-        ref.read(reviewNotifierProvider.notifier).submitTranslation(answer);
-      },
-    );
-  }
-
-  Widget _buildAskKnowledgeView(
-    BuildContext context,
-    WidgetRef ref,
-    ReviewUiState state,
-  ) {
-    final voiceState = ref.watch(voiceModeProvider);
-    final item = state.currentItem!;
-
-    if (voiceState.isEnabled) {
-      return _VoiceShowWordView(
-        item: item,
-        currentIndex: state.currentIndex,
-        totalItems: state.totalItems,
-      );
-    }
-
-    return _AskKnowledgeView(
-      item: item,
-      currentIndex: state.currentIndex,
-      totalItems: state.totalItems,
-      onKnow: () => ref.read(reviewNotifierProvider.notifier).answerKnowWord(),
-      onDontKnow: () => ref.read(reviewNotifierProvider.notifier).answerDontKnowWord(),
+    return Text(
+      '${state.sessionPosition} / ${state.sessionTotalCount}',
+      style: AppTypography.headingSmall.copyWith(
+        fontFeatures: const [FontFeature.tabularFigures()],
+      ),
     );
   }
 }
 
 // ---------------------------------------------------------------------------
-// Ask Knowledge View (Know / Don't Know)
+// Shared bits
 // ---------------------------------------------------------------------------
 
-class _AskKnowledgeView extends StatelessWidget {
-  const _AskKnowledgeView({
-    required this.item,
-    required this.currentIndex,
-    required this.totalItems,
-    required this.onKnow,
-    required this.onDontKnow,
-  });
+class _SessionProgressBar extends StatelessWidget {
+  const _SessionProgressBar({required this.progress});
 
-  final VocabularyItem item;
-  final int currentIndex;
-  final int totalItems;
-  final VoidCallback onKnow;
-  final VoidCallback onDontKnow;
+  final double progress;
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: progress),
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, _) => ClipRRect(
+        borderRadius: AppRadius.fullBorder,
+        child: LinearProgressIndicator(
+          value: value,
+          minHeight: 6,
+          backgroundColor: AppColors.surfaceElevated,
+          color: AppColors.cocoa,
+        ),
+      ),
+    );
+  }
+}
 
-    return SingleChildScrollView(
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 400),
-            child: Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: AppRadius.xLargeBorder,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.xl,
-                  vertical: AppSpacing.xxl,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    LinearProgressIndicator(
-                      value: totalItems > 0 ? currentIndex / totalItems : 0,
-                      backgroundColor: AppColors.surfaceElevated,
-                      color: AppColors.primary,
+/// Page layout for a review step: scrollable content, optionally centred
+/// vertically, with the primary actions pinned above the bottom edge.
+class _ReviewPage extends StatelessWidget {
+  const _ReviewPage({
+    required this.children,
+    this.actions,
+    this.centered = false,
+  });
+
+  final List<Widget> children;
+  final Widget? actions;
+  final bool centered;
+
+  static const _vPadding = AppSpacing.md + AppSpacing.lg;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) => SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(
+                    20,
+                    AppSpacing.md,
+                    20,
+                    AppSpacing.lg,
+                  ),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: (constraints.maxHeight - _vPadding)
+                          .clamp(0.0, double.infinity),
                     ),
-                    const SizedBox(height: AppSpacing.xxl),
-                    Text(item.word, style: AppTypography.displayMedium),
-                    const SizedBox(height: AppSpacing.sm),
-                    Text(
-                      item.language,
-                      style: AppTypography.bodySmall.copyWith(color: AppColors.textMuted),
+                    child: Column(
+                      mainAxisAlignment: centered
+                          ? MainAxisAlignment.center
+                          : MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: children,
                     ),
-                    const SizedBox(height: AppSpacing.xxl),
-                    Text(
-                      l10n.doYouKnowThisWord,
-                      style: AppTypography.bodyLarge.copyWith(color: AppColors.textSecondary),
-                    ),
-                    const SizedBox(height: AppSpacing.xl),
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      spacing: AppSpacing.md,
-                      runSpacing: AppSpacing.md,
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: onDontKnow,
-                          icon: const Icon(Icons.close),
-                          label: Text(l10n.iDontKnowIt),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.lg,
-                              vertical: AppSpacing.md,
-                            ),
-                          ),
-                        ),
-                        FilledButton.icon(
-                          onPressed: onKnow,
-                          icon: const Icon(Icons.check),
-                          label: Text(l10n.iKnowIt),
-                          style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.lg,
-                              vertical: AppSpacing.md,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
+            if (actions != null)
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    20,
+                    AppSpacing.sm,
+                    20,
+                    AppSpacing.md,
+                  ),
+                  child: actions,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The flash card: the word set large on a sheet of paper.
+class _WordCard extends StatelessWidget {
+  const _WordCard({
+    required this.item,
+    required this.children,
+    this.onTap,
+  });
+
+  final VocabularyItem item;
+  final List<Widget> children;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.paper,
+      elevation: 3,
+      shadowColor: AppColors.cocoa.withValues(alpha: 0.25),
+      shape: RoundedRectangleBorder(
+        borderRadius: AppRadius.xLargeBorder,
+        side: const BorderSide(color: AppColors.outline),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.xl,
+            AppSpacing.lg,
+            AppSpacing.xl,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TagPill(item.language),
+              const SizedBox(height: AppSpacing.xl),
+              Text(
+                item.word,
+                style: AppTypography.displayLarge,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              ...children,
+            ],
           ),
         ),
       ),
@@ -364,134 +474,39 @@ class _AskKnowledgeView extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Explanation View (for "Don't Know" selection)
-// ---------------------------------------------------------------------------
+/// "I don't know it" / "I know it": the two accents of the palette — the
+/// ebb (crimson) and the flow (mint).
+class _KnowButtons extends StatelessWidget {
+  const _KnowButtons({required this.onKnow, required this.onDontKnow});
 
-class _ExplanationView extends StatelessWidget {
-  const _ExplanationView({
-    required this.item,
-    required this.currentIndex,
-    required this.totalItems,
-    required this.onNext,
-  });
-
-  final VocabularyItem item;
-  final int currentIndex;
-  final int totalItems;
-  final VoidCallback onNext;
+  final VoidCallback onKnow;
+  final VoidCallback onDontKnow;
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Column(
+    final l10n = context.l10n;
+    return IntrinsicHeight(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          LinearProgressIndicator(
-            value: totalItems > 0 ? currentIndex / totalItems : 0,
-            backgroundColor: AppColors.surfaceElevated,
-            color: AppColors.warning,
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          // Word header
-          Card(
-            color: AppColors.warning.withAlpha(25),
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.lg),
-              child: Column(
-                children: [
-                  Text(item.word, style: AppTypography.headingLarge),
-                  if (item.pronunciation != null && item.pronunciation!.isNotEmpty) ...[
-                    const SizedBox(height: AppSpacing.xs),
-                    Text(
-                      item.pronunciation!,
-                      style: AppTypography.bodyMedium.copyWith(
-                        color: AppColors.textSecondary,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    item.language,
-                    style: AppTypography.bodySmall.copyWith(color: AppColors.textMuted),
-                  ),
-                ],
-              ),
+          Expanded(
+            child: _AnswerTile(
+              icon: Icons.close_rounded,
+              label: l10n.iDontKnowIt,
+              background: AppColors.errorSoft,
+              foreground: AppColors.error,
+              onTap: onDontKnow,
             ),
           ),
-          const SizedBox(height: AppSpacing.lg),
-          // Definition
-          if (item.definition != null && item.definition!.isNotEmpty) ...[
-            _ExplanationSection(
-              title: l10n.definition,
-              icon: Icons.book_outlined,
-              content: item.definition!,
+          const SizedBox(width: 12),
+          Expanded(
+            child: _AnswerTile(
+              icon: Icons.check_rounded,
+              label: l10n.iKnowIt,
+              background: AppColors.mint,
+              foreground: AppColors.cocoa,
+              onTap: onKnow,
             ),
-            const SizedBox(height: AppSpacing.md),
-          ],
-          // Explanation
-          if (item.explanation != null && item.explanation!.isNotEmpty) ...[
-            _ExplanationSection(
-              title: l10n.meaning,
-              icon: Icons.lightbulb_outline,
-              content: item.explanation!,
-            ),
-            const SizedBox(height: AppSpacing.md),
-          ],
-          // Usage
-          if (item.usage != null && item.usage!.isNotEmpty) ...[
-            _ExplanationSection(
-              title: l10n.usage,
-              icon: Icons.format_quote,
-              content: item.usage!,
-            ),
-            const SizedBox(height: AppSpacing.md),
-          ],
-          // Examples
-          if (item.examples != null && item.examples!.isNotEmpty) ...[
-            _ExplanationListSection(
-              title: l10n.examples,
-              icon: Icons.list_alt,
-              items: item.examples!,
-            ),
-            const SizedBox(height: AppSpacing.md),
-          ],
-          // Synonyms
-          if (item.synonyms != null && item.synonyms!.isNotEmpty) ...[
-            _ExplanationChipSection(
-              title: l10n.synonyms,
-              icon: Icons.swap_horiz,
-              items: item.synonyms!,
-            ),
-            const SizedBox(height: AppSpacing.md),
-          ],
-          // Collocations
-          if (item.collocations != null && item.collocations!.isNotEmpty) ...[
-            _ExplanationChipSection(
-              title: l10n.collocations,
-              icon: Icons.link,
-              items: item.collocations!,
-            ),
-            const SizedBox(height: AppSpacing.md),
-          ],
-          // Common Mistakes
-          if (item.commonMistakes != null && item.commonMistakes!.isNotEmpty) ...[
-            _ExplanationListSection(
-              title: l10n.commonMistakes,
-              icon: Icons.warning_amber_outlined,
-              items: item.commonMistakes!,
-              isWarning: true,
-            ),
-            const SizedBox(height: AppSpacing.md),
-          ],
-          const SizedBox(height: AppSpacing.xl),
-          FilledButton(
-            onPressed: onNext,
-            child: Text(l10n.gotIt),
           ),
         ],
       ),
@@ -499,210 +514,250 @@ class _ExplanationView extends StatelessWidget {
   }
 }
 
-class _ExplanationSection extends StatelessWidget {
-  const _ExplanationSection({
-    required this.title,
+class _AnswerTile extends StatelessWidget {
+  const _AnswerTile({
     required this.icon,
-    required this.content,
-  });
-
-  final String title;
-  final IconData icon;
-  final String content;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 18, color: AppColors.primary),
-                const SizedBox(width: AppSpacing.sm),
-                Text(title, style: AppTypography.labelLarge.copyWith(color: AppColors.primary)),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(content, style: AppTypography.bodyMedium),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ExplanationListSection extends StatelessWidget {
-  const _ExplanationListSection({
-    required this.title,
-    required this.icon,
-    required this.items,
-    this.isWarning = false,
-  });
-
-  final String title;
-  final IconData icon;
-  final List<String> items;
-  final bool isWarning;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = isWarning ? AppColors.warning : AppColors.primary;
-
-    return Card(
-      color: isWarning ? AppColors.warning.withAlpha(15) : null,
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 18, color: color),
-                const SizedBox(width: AppSpacing.sm),
-                Text(title, style: AppTypography.labelLarge.copyWith(color: color)),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            ...items.map((item) => Padding(
-                  padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('• ', style: AppTypography.bodyMedium.copyWith(color: color)),
-                      Expanded(child: Text(item, style: AppTypography.bodyMedium)),
-                    ],
-                  ),
-                )),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ExplanationChipSection extends StatelessWidget {
-  const _ExplanationChipSection({
-    required this.title,
-    required this.icon,
-    required this.items,
-  });
-
-  final String title;
-  final IconData icon;
-  final List<String> items;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 18, color: AppColors.primary),
-                const SizedBox(width: AppSpacing.sm),
-                Text(title, style: AppTypography.labelLarge.copyWith(color: AppColors.primary)),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: AppSpacing.sm,
-              runSpacing: AppSpacing.xs,
-              children: items
-                  .map((item) => Chip(
-                        label: Text(item, style: AppTypography.bodySmall),
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                      ))
-                  .toList(),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Flash card front
-// ---------------------------------------------------------------------------
-
-class _FlashCardFront extends StatelessWidget {
-  const _FlashCardFront({
-    required this.item,
-    required this.currentIndex,
-    required this.totalItems,
+    required this.label,
+    required this.background,
+    required this.foreground,
     required this.onTap,
   });
 
-  final VocabularyItem item;
-  final int currentIndex;
-  final int totalItems;
+  final IconData icon;
+  final String label;
+  final Color background;
+  final Color foreground;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Center(
+    return Material(
+      color: background,
+      borderRadius: AppRadius.largeBorder,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 400),
-            child: GestureDetector(
-              onTap: onTap,
-              child: Card(
-                elevation: 4,
-                shape: RoundedRectangleBorder(
-                  borderRadius: AppRadius.xLargeBorder,
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.xl,
-                    vertical: AppSpacing.xxl,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      LinearProgressIndicator(
-                        value: totalItems > 0 ? currentIndex / totalItems : 0,
-                        backgroundColor: AppColors.surfaceElevated,
-                        color: AppColors.primary,
-                      ),
-                      const SizedBox(height: AppSpacing.xxl),
-                      Text(item.word, style: AppTypography.displayMedium),
-                      const SizedBox(height: AppSpacing.sm),
-                      Text(
-                        item.language,
-                        style: AppTypography.bodySmall
-                            .copyWith(color: AppColors.textMuted),
-                      ),
-                      const SizedBox(height: AppSpacing.xxl),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.touch_app_outlined,
-                              size: 16, color: AppColors.textMuted),
-                          const SizedBox(width: AppSpacing.xs),
-                          Text(
-                            AppLocalizations.of(context)!.tapToAnswer,
-                            style: AppTypography.bodySmall
-                                .copyWith(color: AppColors.textMuted),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 18),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: foreground, size: 26),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                style: AppTypography.labelLarge.copyWith(color: foreground),
+                textAlign: TextAlign.center,
               ),
-            ),
+            ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Primary action enabled only when the answer is not blank.
+class _SubmitButton extends StatelessWidget {
+  const _SubmitButton({
+    required this.controller,
+    required this.label,
+    required this.onSubmit,
+  });
+
+  final TextEditingController controller;
+  final String label;
+  final VoidCallback onSubmit;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) => FilledButton(
+        onPressed: value.text.trim().isEmpty ? null : onSubmit,
+        child: Text(label),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Flash card front / knowledge question
+// ---------------------------------------------------------------------------
+
+class _FlashCardFront extends StatelessWidget {
+  const _FlashCardFront({required this.item, required this.onTap});
+
+  final VocabularyItem item;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ReviewPage(
+      centered: true,
+      children: [
+        _WordCard(
+          item: item,
+          onTap: onTap,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.touch_app_outlined,
+                  size: 16,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                Text(
+                  context.l10n.tapToAnswer,
+                  style: AppTypography.labelMedium,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _AskKnowledgeView extends StatelessWidget {
+  const _AskKnowledgeView({
+    required this.item,
+    required this.onKnow,
+    required this.onDontKnow,
+  });
+
+  final VocabularyItem item;
+  final VoidCallback onKnow;
+  final VoidCallback onDontKnow;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ReviewPage(
+      centered: true,
+      actions: _KnowButtons(onKnow: onKnow, onDontKnow: onDontKnow),
+      children: [
+        _WordCard(
+          item: item,
+          children: [
+            Text(
+              context.l10n.doYouKnowThisWord,
+              style: AppTypography.bodyLarge.copyWith(
+                color: AppColors.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Explanation (after "I don't know")
+// ---------------------------------------------------------------------------
+
+class _ExplanationView extends StatelessWidget {
+  const _ExplanationView({required this.item, required this.onNext});
+
+  final VocabularyItem item;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final hasContent = item.definition?.isNotEmpty ?? false;
+    final pronunciation = item.pronunciation;
+
+    final sections = <(String, IconData, Color, Widget)>[
+      if (item.definition?.isNotEmpty ?? false)
+        (
+          l10n.definition,
+          Icons.menu_book_outlined,
+          AppColors.textSecondary,
+          Text(
+            item.definition!,
+            style: AppTypography.bodyLarge.copyWith(
+              fontSize: 18,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      if (item.explanation?.isNotEmpty ?? false)
+        (
+          l10n.meaning,
+          Icons.lightbulb_outline_rounded,
+          AppColors.textSecondary,
+          Text(item.explanation!, style: AppTypography.bodyMedium),
+        ),
+      if (item.usage?.isNotEmpty ?? false)
+        (
+          l10n.usage,
+          Icons.format_quote_rounded,
+          AppColors.textSecondary,
+          Text(item.usage!, style: AppTypography.bodyMedium),
+        ),
+      if (item.examples?.isNotEmpty ?? false)
+        (
+          l10n.examples,
+          Icons.notes_rounded,
+          AppColors.textSecondary,
+          QuoteList(items: item.examples!),
+        ),
+      if (item.synonyms?.isNotEmpty ?? false)
+        (
+          l10n.synonyms,
+          Icons.swap_horiz_rounded,
+          AppColors.textSecondary,
+          WordChips(items: item.synonyms!),
+        ),
+      if (item.collocations?.isNotEmpty ?? false)
+        (
+          l10n.collocations,
+          Icons.link_rounded,
+          AppColors.textSecondary,
+          WordChips(items: item.collocations!),
+        ),
+      if (item.commonMistakes?.isNotEmpty ?? false)
+        (
+          l10n.commonMistakes,
+          Icons.warning_amber_rounded,
+          AppColors.error,
+          MistakeList(items: item.commonMistakes!),
+        ),
+    ];
+
+    return _ReviewPage(
+      actions: FilledButton(onPressed: onNext, child: Text(l10n.gotIt)),
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TagPill(item.language, icon: Icons.translate_rounded),
+        ),
+        const SizedBox(height: 12),
+        Text(item.word, style: AppTypography.displayMedium),
+        if (pronunciation != null && pronunciation.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(pronunciation, style: AppTypography.pronunciation),
+        ],
+        const SizedBox(height: AppSpacing.lg),
+        if (!hasContent)
+          Text(
+            l10n.aiContentMissing,
+            style: AppTypography.bodyMedium.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+        for (final (title, icon, color, child) in sections) ...[
+          SectionLabel(title, icon: icon, color: color),
+          const SizedBox(height: 10),
+          child,
+          const SizedBox(height: AppSpacing.lg),
+        ],
+      ],
     );
   }
 }
@@ -714,92 +769,54 @@ class _FlashCardFront extends StatelessWidget {
 class _MeaningInputView extends StatelessWidget {
   const _MeaningInputView({
     required this.item,
-    required this.currentIndex,
-    required this.totalItems,
     required this.controller,
     required this.onSubmit,
   });
 
   final VocabularyItem item;
-  final int currentIndex;
-  final int totalItems;
   final TextEditingController controller;
-  final ValueChanged<String> onSubmit;
+  final VoidCallback onSubmit;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          LinearProgressIndicator(
-            value: totalItems > 0 ? currentIndex / totalItems : 0,
-            backgroundColor: AppColors.surfaceElevated,
-            color: AppColors.primary,
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: AppRadius.largeBorder,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.lg,
-                vertical: AppSpacing.xl,
-              ),
-              child: Column(
-                children: [
-                  Text(item.word, style: AppTypography.displayMedium),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    item.language,
-                    style: AppTypography.bodySmall
-                        .copyWith(color: AppColors.textMuted),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          Text(
-            AppLocalizations.of(context)!.whatIsTheMeaning,
-            style: AppTypography.bodyMedium
-                .copyWith(color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          TextField(
-            controller: controller,
-            maxLines: 1,
-            autofocus: true,
-            decoration: InputDecoration(
-              hintText: AppLocalizations.of(context)!.enterMeaningHint,
-            ),
-            textInputAction: TextInputAction.done,
-            onSubmitted: (value) {
-              final answer = value.trim();
-              if (answer.isNotEmpty) onSubmit(answer);
-            },
-          ),
-          const SizedBox(height: AppSpacing.md),
-          FilledButton(
-            onPressed: () {
-              final answer = controller.text.trim();
-              if (answer.isNotEmpty) onSubmit(answer);
-            },
-            child: Text(AppLocalizations.of(context)!.submitAnswer),
-          ),
-        ],
-      ),
+    final l10n = context.l10n;
+    return _ReviewPage(
+      children: [
+        const SizedBox(height: AppSpacing.md),
+        Center(child: TagPill(item.language)),
+        const SizedBox(height: AppSpacing.md),
+        Text(
+          item.word,
+          style: AppTypography.displayLarge,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.xxl),
+        Text(l10n.whatIsTheMeaning, style: AppTypography.headingSmall),
+        const SizedBox(height: AppSpacing.sm),
+        TextField(
+          controller: controller,
+          autofocus: true,
+          style: AppTypography.bodyLarge,
+          decoration: InputDecoration(hintText: l10n.enterMeaningHint),
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => onSubmit(),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        _SubmitButton(
+          controller: controller,
+          label: l10n.submitAnswer,
+          onSubmit: onSubmit,
+        ),
+      ],
     );
   }
 }
 
 // ---------------------------------------------------------------------------
-// Busy (spinner) view — shared for all loading phases
+// Busy view — shared for all loading phases
 // ---------------------------------------------------------------------------
 
+/// The word with the brand mark breathing underneath while the AI works.
 class _BusyView extends StatelessWidget {
   const _BusyView({required this.word, required this.message});
 
@@ -809,20 +826,29 @@ class _BusyView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (word.isNotEmpty) Text(word, style: AppTypography.displayMedium),
-            const SizedBox(height: AppSpacing.xl),
-            const CircularProgressIndicator(),
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              message,
-              style: AppTypography.bodyMedium
-                  .copyWith(color: AppColors.textSecondary),
-            ),
+            if (word.isNotEmpty) ...[
+              Text(
+                word,
+                style: AppTypography.displayMedium,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppSpacing.xl),
+            ],
+            const BrandPulse(size: 52),
+            if (message.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.lg),
+              Text(
+                message,
+                style: AppTypography.bodyMedium
+                    .copyWith(color: AppColors.textSecondary),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ],
         ),
       ),
@@ -847,62 +873,57 @@ class _MeaningFailedView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                color: AppColors.error.withAlpha(25),
-                shape: BoxShape.circle,
-                border: Border.all(color: AppColors.error, width: 2),
+    final l10n = context.l10n;
+    return _ReviewPage(
+      actions: FilledButton(onPressed: onNext, child: Text(l10n.nextWord)),
+      children: [
+        const SizedBox(height: AppSpacing.sm),
+        const Center(
+          child: ToneBadge(Icons.close_rounded, AppTone.error, size: 64),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          l10n.answerIncorrect,
+          style: AppTypography.headingMedium.copyWith(color: AppColors.error),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          item.word,
+          style: AppTypography.displaySmall,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        Container(
+          padding: const EdgeInsets.all(AppSpacing.md + 2),
+          decoration: BoxDecoration(
+            color: AppColors.successSoft,
+            borderRadius: AppRadius.largeBorder,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SectionLabel(
+                l10n.correctMeaning,
+                icon: Icons.check_circle_outline_rounded,
+                color: AppColors.successText,
               ),
-              child: const Icon(Icons.close, color: AppColors.error, size: 32),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Center(
-            child: Text(item.word, style: AppTypography.headingMedium),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            decoration: BoxDecoration(
-              color: AppColors.error.withAlpha(15),
-              borderRadius: AppRadius.largeBorder,
-              border: Border.all(color: AppColors.error.withAlpha(80)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  AppLocalizations.of(context)!.correctMeaning,
-                  style: AppTypography.bodySmall.copyWith(
-                    color: AppColors.error,
-                    fontWeight: FontWeight.w600,
-                  ),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                item.definition ?? '',
+                style: AppTypography.bodyLarge.copyWith(
+                  fontWeight: FontWeight.w500,
                 ),
-                const SizedBox(height: AppSpacing.xs),
-                Text(item.definition ?? '', style: AppTypography.bodyMedium),
-              ],
-            ),
+              ),
+            ],
           ),
-          const SizedBox(height: AppSpacing.md),
-          FeedbackCard(
-            feedback: evaluation.feedback,
-            weakPoint: evaluation.weakPoint,
-          ),
-          const SizedBox(height: AppSpacing.xl),
-          FilledButton(
-            onPressed: onNext,
-            child: Text(AppLocalizations.of(context)!.nextWord),
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 12),
+        FeedbackCard(
+          feedback: evaluation.feedback,
+          weakPoint: evaluation.weakPoint,
+        ),
+      ],
     );
   }
 }
@@ -911,13 +932,66 @@ class _MeaningFailedView extends StatelessWidget {
 // Translation input
 // ---------------------------------------------------------------------------
 
+class _TranslationPrompt extends StatelessWidget {
+  const _TranslationPrompt({
+    required this.item,
+    required this.sentence,
+    required this.wordHint,
+  });
+
+  final VocabularyItem item;
+  final String sentence;
+  final String? wordHint;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final hint = wordHint;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionLabel(
+          l10n.translateInto(item.language),
+          icon: Icons.translate_rounded,
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: AppRadius.largeBorder,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                sentence,
+                style: AppTypography.headingMedium.copyWith(
+                  fontWeight: FontWeight.w500,
+                  height: 1.45,
+                ),
+              ),
+              if (hint != null && hint.isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.md),
+                TagPill(
+                  l10n.hintUseWord(hint),
+                  icon: Icons.lightbulb_outline_rounded,
+                  tone: AppTone.warning,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _TranslationInputView extends StatelessWidget {
   const _TranslationInputView({
     required this.item,
     required this.sentence,
     required this.wordHint,
-    required this.currentIndex,
-    required this.totalItems,
     required this.controller,
     required this.onSubmit,
   });
@@ -925,81 +999,46 @@ class _TranslationInputView extends StatelessWidget {
   final VocabularyItem item;
   final String sentence;
   final String? wordHint;
-  final int currentIndex;
-  final int totalItems;
   final TextEditingController controller;
-  final ValueChanged<String> onSubmit;
+  final VoidCallback onSubmit;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          LinearProgressIndicator(
-            value: totalItems > 0 ? currentIndex / totalItems : 0,
-            backgroundColor: AppColors.surfaceElevated,
-            color: AppColors.secondary,
+    final l10n = context.l10n;
+    return _ReviewPage(
+      children: [
+        _TranslationPrompt(
+          item: item,
+          sentence: sentence,
+          wordHint: wordHint,
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        TextField(
+          controller: controller,
+          maxLines: 4,
+          minLines: 2,
+          autofocus: true,
+          style: AppTypography.bodyLarge,
+          decoration: InputDecoration(
+            hintText: l10n.yourTranslationHint(item.language),
+            alignLabelWithHint: true,
           ),
-          const SizedBox(height: AppSpacing.xl),
-          Text(
-            AppLocalizations.of(context)!.translateInto(item.language),
-            style: AppTypography.bodyMedium
-                .copyWith(color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceElevated,
-              borderRadius: AppRadius.largeBorder,
-              border: Border.all(color: AppColors.secondary.withAlpha(80)),
-            ),
-            child: Text(sentence, style: AppTypography.bodyLarge),
-          ),
-          if (wordHint != null && wordHint!.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                const Icon(Icons.lightbulb_outline,
-                    size: 14, color: AppColors.textMuted),
-                const SizedBox(width: 4),
-                Text(
-                  AppLocalizations.of(context)!.hintUseWord(wordHint!),
-                  style: AppTypography.bodySmall
-                      .copyWith(color: AppColors.textMuted),
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: AppSpacing.xl),
-          TextField(
-            controller: controller,
-            maxLines: 4,
-            autofocus: true,
-            decoration: InputDecoration(
-              hintText: AppLocalizations.of(context)!.yourTranslationHint(item.language),
-              alignLabelWithHint: true,
-            ),
-            textInputAction: TextInputAction.done,
-          ),
-          const SizedBox(height: AppSpacing.md),
-          FilledButton(
-            onPressed: () {
-              final answer = controller.text.trim();
-              if (answer.isNotEmpty) onSubmit(answer);
-            },
-            child: Text(AppLocalizations.of(context)!.submitTranslation),
-          ),
-        ],
-      ),
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => onSubmit(),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        _SubmitButton(
+          controller: controller,
+          label: l10n.submitTranslation,
+          onSubmit: onSubmit,
+        ),
+      ],
     );
   }
 }
 
 // ---------------------------------------------------------------------------
-// Result view — combined score + pattern badges
+// Result view — combined score + breakdown + pattern badges
 // ---------------------------------------------------------------------------
 
 class _ResultView extends StatelessWidget {
@@ -1007,93 +1046,101 @@ class _ResultView extends StatelessWidget {
     required this.item,
     required this.meaningEvaluation,
     required this.translationEvaluation,
+    required this.combinedScore,
     required this.detectedPatterns,
     required this.previousStrength,
     required this.updatedStrength,
-    required this.currentIndex,
-    required this.totalItems,
+    required this.isLast,
     required this.onNext,
   });
 
   final VocabularyItem item;
   final AiEvaluation meaningEvaluation;
   final AiEvaluation? translationEvaluation;
+  final double combinedScore;
   final List<String> detectedPatterns;
   final double previousStrength;
   final double updatedStrength;
-  final int currentIndex;
-  final int totalItems;
+  final bool isLast;
   final VoidCallback onNext;
-
-  double get _combinedScore {
-    final ts = translationEvaluation?.overallScore;
-    if (ts == null) return meaningEvaluation.overallScore;
-    return meaningEvaluation.overallScore * 0.4 + ts * 0.6;
-  }
 
   @override
   Widget build(BuildContext context) {
-    final score = _combinedScore;
-    final scoreColor = score >= 0.6 ? AppColors.success : AppColors.error;
-    final primaryFeedback = translationEvaluation ?? meaningEvaluation;
+    final l10n = context.l10n;
+    final passed = combinedScore >= kPassScore;
+    final translation = translationEvaluation;
+    final primaryFeedback = translation ?? meaningEvaluation;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                color: scoreColor.withAlpha(25),
-                shape: BoxShape.circle,
-                border: Border.all(color: scoreColor, width: 2),
-              ),
-              child: Center(
-                child: Text(
-                  '${(score * 100).round()}%',
-                  style: AppTypography.headingLarge.copyWith(color: scoreColor),
-                ),
-              ),
-            ),
+    // The meaning check only grades the meaning; the translation step grades
+    // meaning preservation, use of the word, grammar and naturalness.
+    final rows = <(String, double)>[
+      (l10n.meaning, meaningEvaluation.overallScore),
+      if (translation != null) ...[
+        (l10n.translation, translation.meaningScore),
+        (l10n.wordUsage, translation.usageScore),
+        (l10n.grammar, translation.grammarScore),
+        (l10n.naturalness, translation.exampleScore),
+      ],
+    ];
+
+    return _ReviewPage(
+      actions: FilledButton(
+        onPressed: onNext,
+        child: Text(isLast ? l10n.finish : l10n.nextWord),
+      ),
+      children: [
+        const SizedBox(height: AppSpacing.sm),
+        Center(
+          child: ScoreRing(
+            value: combinedScore,
+            color: passed ? AppColors.success : AppColors.error,
           ),
-          const SizedBox(height: AppSpacing.md),
-          Center(
-            child: Text(item.word, style: AppTypography.headingMedium),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          passed ? l10n.verdictPass : l10n.verdictFail,
+          style: AppTypography.headingMedium.copyWith(
+            color: passed ? AppColors.successText : AppColors.error,
           ),
-          const SizedBox(height: AppSpacing.lg),
-          FeedbackCard(
-            feedback: primaryFeedback.feedback,
-            weakPoint: primaryFeedback.weakPoint,
-          ),
-          const SizedBox(height: AppSpacing.md),
-          _ScoreRow(AppLocalizations.of(context)!.meaning, meaningEvaluation.meaningScore),
-          _ScoreRow(AppLocalizations.of(context)!.usage, meaningEvaluation.usageScore),
-          if (translationEvaluation != null)
-            _ScoreRow(AppLocalizations.of(context)!.translation, translationEvaluation!.usageScore),
-          _ScoreRow(AppLocalizations.of(context)!.grammar, primaryFeedback.grammarScore),
-          if (detectedPatterns.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.md),
-            _PatternBadges(patterns: detectedPatterns),
-          ],
-          const SizedBox(height: AppSpacing.md),
-          MemoryStrengthDelta(
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 2),
+        Text(
+          item.word,
+          style: AppTypography.word,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Center(
+          child: MemoryStrengthDelta(
             previous: previousStrength,
             updated: updatedStrength,
           ),
-          const SizedBox(height: AppSpacing.xl),
-          FilledButton(
-            onPressed: onNext,
-            child: Text(
-              currentIndex + 1 < totalItems
-                ? AppLocalizations.of(context)!.nextWord
-                : AppLocalizations.of(context)!.finish,
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        FeedbackCard(
+          feedback: primaryFeedback.feedback,
+          weakPoint: primaryFeedback.weakPoint,
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md + 2,
+              vertical: 14,
+            ),
+            child: Column(
+              children: [
+                for (final (label, score) in rows) _ScoreRow(label, score),
+              ],
             ),
           ),
+        ),
+        if (detectedPatterns.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.lg),
+          _PatternBadges(patterns: detectedPatterns),
         ],
-      ),
+      ],
     );
   }
 }
@@ -1107,33 +1154,41 @@ class _ScoreRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         children: [
           SizedBox(
-            width: 88,
+            width: 104,
             child: Text(
               label,
-              style: AppTypography.bodySmall
-                  .copyWith(color: AppColors.textSecondary),
+              style: AppTypography.labelMedium,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
           Expanded(
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: AppRadius.fullBorder,
               child: LinearProgressIndicator(
-                value: score,
+                value: score.clamp(0.0, 1.0),
                 backgroundColor: AppColors.surfaceElevated,
-                color: score >= 0.6 ? AppColors.success : AppColors.error,
+                color:
+                    score >= kPassScore ? AppColors.success : AppColors.error,
                 minHeight: 6,
               ),
             ),
           ),
-          const SizedBox(width: AppSpacing.sm),
-          Text(
-            '${(score * 100).round()}%',
-            style: AppTypography.bodySmall
-                .copyWith(color: AppColors.textSecondary),
+          const SizedBox(width: AppSpacing.sm + 2),
+          SizedBox(
+            width: 40,
+            child: Text(
+              '${(score * 100).round()}%',
+              style: AppTypography.labelMedium.copyWith(
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.end,
+            ),
           ),
         ],
       ),
@@ -1151,35 +1206,19 @@ class _PatternBadges extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            const Icon(Icons.warning_amber_rounded,
-                size: 14, color: AppColors.warning),
-            const SizedBox(width: 4),
-            Text(
-              AppLocalizations.of(context)!.patternsToWatch,
-              style: AppTypography.bodySmall.copyWith(
-                color: AppColors.warning,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
+        SectionLabel(
+          context.l10n.patternsToWatch,
+          icon: Icons.warning_amber_rounded,
+          color: AppColors.warningText,
         ),
-        const SizedBox(height: AppSpacing.xs),
+        const SizedBox(height: AppSpacing.sm),
         Wrap(
-          spacing: AppSpacing.xs,
-          runSpacing: AppSpacing.xs,
-          children: patterns
-              .map(
-                (p) => Chip(
-                  label: Text(p, style: AppTypography.bodySmall),
-                  backgroundColor: AppColors.warning.withAlpha(20),
-                  side: BorderSide(color: AppColors.warning.withAlpha(80)),
-                  padding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                ),
-              )
-              .toList(),
+          spacing: AppSpacing.xs + 2,
+          runSpacing: AppSpacing.xs + 2,
+          children: [
+            for (final pattern in patterns.toSet())
+              TagPill(pattern, tone: AppTone.warning),
+          ],
         ),
       ],
     );
@@ -1191,34 +1230,27 @@ class _PatternBadges extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _EmptyView extends StatelessWidget {
-  const _EmptyView({required this.onBack});
+  const _EmptyView({required this.onBack, this.onReviewAll});
 
   final VoidCallback onBack;
 
+  /// Offered when only due words were requested and none are due.
+  final VoidCallback? onReviewAll;
+
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.check_circle_outline,
-                size: 64, color: AppColors.success),
-            const SizedBox(height: AppSpacing.md),
-            Text(AppLocalizations.of(context)!.allCaughtUp, style: AppTypography.headingMedium),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              AppLocalizations.of(context)!.noDueWords,
-              style: AppTypography.bodyMedium
-                  .copyWith(color: AppColors.textSecondary),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: AppSpacing.xl),
-            FilledButton(onPressed: onBack, child: Text(AppLocalizations.of(context)!.back)),
-          ],
-        ),
-      ),
+    final l10n = context.l10n;
+    return AppEmptyState(
+      icon: Icons.check_rounded,
+      tone: AppTone.success,
+      title: l10n.allCaughtUp,
+      message: l10n.noDueWords,
+      actions: [
+        if (onReviewAll != null)
+          FilledButton(
+              onPressed: onReviewAll, child: Text(l10n.reviewAllInstead)),
+        OutlinedButton(onPressed: onBack, child: Text(l10n.back)),
+      ],
     );
   }
 }
@@ -1236,57 +1268,52 @@ class _CompleteView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.star, size: 72, color: AppColors.warning),
-            const SizedBox(height: AppSpacing.md),
-            Text(AppLocalizations.of(context)!.sessionComplete, style: AppTypography.headingMedium),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              AppLocalizations.of(context)!.correctOutOf(correctCount, totalItems),
-              style: AppTypography.bodyLarge
-                  .copyWith(color: AppColors.textSecondary),
-            ),
-            const SizedBox(height: AppSpacing.xl),
-            FilledButton(onPressed: onDone, child: Text(AppLocalizations.of(context)!.done)),
-          ],
-        ),
+    final l10n = context.l10n;
+    final ratio = totalItems == 0 ? 0.0 : correctCount / totalItems;
+    return AppEmptyState(
+      leading: Column(
+        children: [
+          const BrandMark(size: 40),
+          const SizedBox(height: AppSpacing.lg),
+          ScoreRing(
+            value: ratio,
+            color: AppColors.success,
+            label: '$correctCount/$totalItems',
+          ),
+        ],
       ),
+      title: l10n.sessionComplete,
+      message: l10n.correctOutOf(correctCount, totalItems),
+      actions: [FilledButton(onPressed: onDone, child: Text(l10n.done))],
     );
   }
 }
 
 class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.message, required this.onRetry});
+  const _ErrorView({
+    required this.message,
+    required this.onRetry,
+    this.onSkip,
+  });
 
   final String message;
   final VoidCallback onRetry;
 
+  /// Skips the failed word (only when the session itself is fine).
+  final VoidCallback? onSkip;
+
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, size: 48, color: AppColors.error),
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              message,
-              style: AppTypography.bodyMedium
-                  .copyWith(color: AppColors.textSecondary),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            FilledButton(onPressed: onRetry, child: Text(AppLocalizations.of(context)!.retry)),
-          ],
-        ),
-      ),
+    final l10n = context.l10n;
+    return AppEmptyState(
+      icon: Icons.error_outline_rounded,
+      tone: AppTone.error,
+      title: message,
+      actions: [
+        FilledButton(onPressed: onRetry, child: Text(l10n.retry)),
+        if (onSkip != null)
+          OutlinedButton(onPressed: onSkip, child: Text(l10n.skipWord)),
+      ],
     );
   }
 }
@@ -1296,249 +1323,150 @@ class _ErrorView extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _VoiceShowWordView extends ConsumerStatefulWidget {
-  const _VoiceShowWordView({
-    required this.item,
-    required this.currentIndex,
-    required this.totalItems,
-  });
+  const _VoiceShowWordView({required this.item});
 
   final VocabularyItem item;
-  final int currentIndex;
-  final int totalItems;
 
   @override
   ConsumerState<_VoiceShowWordView> createState() => _VoiceShowWordViewState();
 }
 
+enum _VoiceStep { initial, spokeWord, askedKnowledge, askedMeaning }
+
 class _VoiceShowWordViewState extends ConsumerState<_VoiceShowWordView> {
-  /// Flow state: 0=initial, 1=spoken word, 2=asked knowledge, 3=waiting for meaning
-  int _flowState = 0;
-  String? _nativeLanguage;
+  _VoiceStep _step = _VoiceStep.initial;
+  String _nativeLanguage = 'Korean';
+
+  // Captured in initState: `ref` is unusable in dispose.
+  late final VoiceModeNotifier _voice;
+  late final ReviewNotifier _review;
 
   @override
   void initState() {
     super.initState();
-    _setupVoiceCallbacks();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _startVoiceFlow();
-    });
+    _voice = ref.read(voiceModeProvider.notifier);
+    _review = ref.read(reviewNotifierProvider.notifier);
+    _voice.bindCallbacks(
+      this,
+      onKnowledgeResult: (knows) => knows ? _askForMeaning() : _dontKnow(),
+      onMeaningResult: (transcript) {
+        if (transcript.isNotEmpty) _review.submitMeaning(transcript);
+      },
+      onSpeakingComplete: () {
+        switch (_step) {
+          case _VoiceStep.spokeWord:
+            _askKnowledge();
+          case _VoiceStep.askedKnowledge:
+            _voice.startListeningKnowledge(_nativeLanguage);
+          case _VoiceStep.askedMeaning:
+            _voice.startListeningMeaning(_nativeLanguage);
+          case _VoiceStep.initial:
+            break;
+        }
+      },
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startVoiceFlow());
   }
 
-  void _setupVoiceCallbacks() {
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-
-    // Called when user responds to "do you know this word?"
-    voiceNotifier.onKnowledgeResult = (knowsWord) {
-      if (knowsWord) {
-        // User knows the word, ask them to explain the meaning
-        _askForMeaning();
-      } else {
-        // User doesn't know the word, tap the card to show meaning (like normal mode)
-        ref.read(reviewNotifierProvider.notifier).tapWord();
-      }
-    };
-
-    voiceNotifier.onMeaningResult = (transcript) {
-      if (transcript.isNotEmpty) {
-        // Submit the voice answer
-        ref.read(reviewNotifierProvider.notifier).submitMeaning(transcript);
-      }
-    };
-
-    voiceNotifier.onSpeakingComplete = () {
-      if (_flowState == 1) {
-        // After speaking the word, ask "do you know this word?"
-        _askKnowledge();
-      } else if (_flowState == 2) {
-        // After asking knowledge, start listening for yes/no
-        _startListeningKnowledge();
-      } else if (_flowState == 3) {
-        // After asking for meaning, start listening
-        _startListeningForMeaning();
-      }
-    };
+  @override
+  void dispose() {
+    // Only clears callbacks this view registered (see bindCallbacks).
+    _voice.clearCallbacks(this);
+    super.dispose();
   }
 
   Future<void> _startVoiceFlow() async {
-    final profile = await ref.read(profileProvider.future);
-    _nativeLanguage = profile?.nativeLanguage ?? 'Korean';
-
-    // Step 1: Speak the word
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-    await voiceNotifier.speakWord(widget.item.word, widget.item.language);
-    _flowState = 1;
+    if (!mounted) return;
+    _nativeLanguage = ref.read(reviewNotifierProvider).nativeLanguage;
+    _step = _VoiceStep.spokeWord;
+    await _voice.speakWord(widget.item.word, widget.item.language);
   }
 
   Future<void> _askKnowledge() async {
-    final l10n = AppLocalizations.of(context)!;
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-    await voiceNotifier.askKnowledge(l10n.doYouKnowThisWord, _nativeLanguage!);
-    _flowState = 2;
-  }
-
-  Future<void> _startListeningKnowledge() async {
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-    await voiceNotifier.startListeningKnowledge(_nativeLanguage!);
+    if (!mounted) return;
+    _step = _VoiceStep.askedKnowledge;
+    await _voice.askKnowledge(context.l10n.doYouKnowThisWord, _nativeLanguage);
   }
 
   Future<void> _askForMeaning() async {
-    final l10n = AppLocalizations.of(context)!;
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-    await voiceNotifier.speakFeedback(l10n.explainTheMeaning, _nativeLanguage!);
-    _flowState = 3;
+    if (!mounted) return;
+    _review.prefetchTranslation();
+    _step = _VoiceStep.askedMeaning;
+    await _voice.speakFeedback(context.l10n.explainTheMeaning, _nativeLanguage);
   }
 
-  Future<void> _startListeningForMeaning() async {
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-    await voiceNotifier.startListeningMeaning(_nativeLanguage!);
+  /// "Don't know" grades the word and shows its explanation. (It used to
+  /// only flip the card, which re-rendered this view and asked again in an
+  /// endless loop.)
+  void _dontKnow() {
+    unawaited(_voice.stop());
+    _review.answerDontKnowWord();
   }
 
   void _handleMicTap() {
     final voiceState = ref.read(voiceModeProvider);
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-
     if (voiceState.isListening) {
-      voiceNotifier.stop();
-    } else if (voiceState.phase == VoiceModePhase.listeningKnowledge ||
-        _flowState == 2) {
-      _startListeningKnowledge();
+      _voice.stop();
+    } else if (_step == _VoiceStep.askedKnowledge) {
+      _voice.startListeningKnowledge(_nativeLanguage);
     } else {
-      _startListeningForMeaning();
-    }
-  }
-
-  void _handleKnowButton(bool knows) {
-    ref.read(voiceModeProvider.notifier).stop();
-    if (knows) {
-      _askForMeaning();
-    } else {
-      ref.read(reviewNotifierProvider.notifier).tapWord();
+      _voice.startListeningMeaning(_nativeLanguage);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final voiceState = ref.watch(voiceModeProvider);
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = context.l10n;
+    final askingKnowledge =
+        voiceState.phase == VoiceModePhase.askingKnowledge ||
+            voiceState.phase == VoiceModePhase.listeningKnowledge;
 
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Card(
-          elevation: 4,
-          shape: RoundedRectangleBorder(
-            borderRadius: AppRadius.xLargeBorder,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.xl,
-              vertical: AppSpacing.xxl,
+    return _ReviewPage(
+      centered: true,
+      actions: askingKnowledge
+          ? _KnowButtons(
+              onKnow: () {
+                unawaited(_voice.stop());
+                _askForMeaning();
+              },
+              onDontKnow: _dontKnow,
+            )
+          : null,
+      children: [
+        _WordCard(
+          item: widget.item,
+          children: [
+            const VoiceModeIndicator(),
+            const SizedBox(height: AppSpacing.lg),
+            VoiceMicButton(onTap: _handleMicTap, size: 80),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              askingKnowledge
+                  ? l10n.sayYesOrNo
+                  : voiceState.isListening
+                      ? l10n.tapToStopListening
+                      : l10n.tapMicToSpeak,
+              style: AppTypography.labelMedium,
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                LinearProgressIndicator(
-                  value: widget.totalItems > 0
-                      ? widget.currentIndex / widget.totalItems
-                      : 0,
-                  backgroundColor: AppColors.surfaceElevated,
-                  color: AppColors.primary,
+            if (!askingKnowledge) ...[
+              const SizedBox(height: AppSpacing.lg),
+              const VoiceTranscriptDisplay(),
+              if (voiceState.currentTranscript.isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.md),
+                FilledButton(
+                  onPressed: () {
+                    final transcript = voiceState.currentTranscript;
+                    unawaited(_voice.stop());
+                    _review.submitMeaning(transcript);
+                  },
+                  child: Text(l10n.submitAnswer),
                 ),
-                const SizedBox(height: AppSpacing.xxl),
-                Text(widget.item.word, style: AppTypography.displayMedium),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  widget.item.language,
-                  style: AppTypography.bodySmall
-                      .copyWith(color: AppColors.textMuted),
-                ),
-                const SizedBox(height: AppSpacing.xl),
-                const VoiceModeIndicator(),
-                const SizedBox(height: AppSpacing.lg),
-                // Show knowledge confirmation buttons during askingKnowledge or listeningKnowledge phase
-                if (voiceState.phase == VoiceModePhase.askingKnowledge ||
-                    voiceState.phase == VoiceModePhase.listeningKnowledge) ...[
-                  VoiceMicButton(onTap: _handleMicTap, size: 80),
-                  const SizedBox(height: AppSpacing.md),
-                  Text(
-                    l10n.sayYesOrNo,
-                    style: AppTypography.bodySmall
-                        .copyWith(color: AppColors.textMuted),
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
-                  // Manual buttons as fallback
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: () => _handleKnowButton(false),
-                        icon: const Icon(Icons.close),
-                        label: Text(l10n.iDontKnowIt),
-                      ),
-                      const SizedBox(width: AppSpacing.md),
-                      FilledButton.icon(
-                        onPressed: () => _handleKnowButton(true),
-                        icon: const Icon(Icons.check),
-                        label: Text(l10n.iKnowIt),
-                      ),
-                    ],
-                  ),
-                ] else ...[
-                  // Show mic button for meaning input
-                  VoiceMicButton(onTap: _handleMicTap, size: 80),
-                  const SizedBox(height: AppSpacing.md),
-                  Text(
-                    voiceState.isListening
-                        ? l10n.tapToStopListening
-                        : l10n.tapMicToSpeak,
-                    style: AppTypography.bodySmall
-                        .copyWith(color: AppColors.textMuted),
-                  ),
-                  if (voiceState.currentTranscript.isNotEmpty) ...[
-                    const SizedBox(height: AppSpacing.lg),
-                    Container(
-                      padding: const EdgeInsets.all(AppSpacing.md),
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceElevated,
-                        borderRadius: AppRadius.mediumBorder,
-                        border: Border.all(color: AppColors.textMuted.withAlpha(50)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.format_quote,
-                              size: 16, color: AppColors.textMuted),
-                          const SizedBox(width: AppSpacing.sm),
-                          Expanded(
-                            child: Text(
-                              voiceState.currentTranscript,
-                              style: AppTypography.bodyMedium.copyWith(
-                                fontStyle: FontStyle.italic,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: AppSpacing.lg),
-                  // Manual submit button as fallback
-                  if (voiceState.currentTranscript.isNotEmpty &&
-                      voiceState.phase != VoiceModePhase.listeningKnowledge)
-                    FilledButton(
-                      onPressed: () {
-                        ref.read(voiceModeProvider.notifier).stop();
-                        ref
-                            .read(reviewNotifierProvider.notifier)
-                            .submitMeaning(voiceState.currentTranscript);
-                      },
-                      child: Text(l10n.submitAnswer),
-                    ),
-                ],
               ],
-            ),
-          ),
+            ],
+          ],
         ),
-      ),
+      ],
     );
   }
 }
@@ -1548,15 +1476,11 @@ class _VoiceTranslationInputView extends ConsumerStatefulWidget {
     required this.item,
     required this.sentence,
     required this.wordHint,
-    required this.currentIndex,
-    required this.totalItems,
   });
 
   final VocabularyItem item;
   final String sentence;
   final String? wordHint;
-  final int currentIndex;
-  final int totalItems;
 
   @override
   ConsumerState<_VoiceTranslationInputView> createState() =>
@@ -1567,155 +1491,90 @@ class _VoiceTranslationInputViewState
     extends ConsumerState<_VoiceTranslationInputView> {
   bool _hasSpokenSentence = false;
 
+  // Captured in initState: `ref` is unusable in dispose.
+  late final VoiceModeNotifier _voice;
+  late final ReviewNotifier _review;
+
   @override
   void initState() {
     super.initState();
-    _setupVoiceCallbacks();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _speakSentenceAndWait();
-    });
+    _voice = ref.read(voiceModeProvider.notifier);
+    _review = ref.read(reviewNotifierProvider.notifier);
+    _voice.bindCallbacks(
+      this,
+      onTranslationResult: (transcript) {
+        if (transcript.isNotEmpty) _review.submitTranslation(transcript);
+      },
+      onSpeakingComplete: () {
+        if (_hasSpokenSentence) _startListening();
+      },
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => _speakSentence());
   }
 
-  void _setupVoiceCallbacks() {
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-
-    voiceNotifier.onTranslationResult = (transcript) {
-      if (transcript.isNotEmpty) {
-        ref.read(reviewNotifierProvider.notifier).submitTranslation(transcript);
-      }
-    };
-
-    voiceNotifier.onSpeakingComplete = () {
-      if (_hasSpokenSentence) {
-        _startListeningForTranslation();
-      }
-    };
+  @override
+  void dispose() {
+    _voice.clearCallbacks(this);
+    super.dispose();
   }
 
-  Future<void> _speakSentenceAndWait() async {
-    final profile = await ref.read(profileProvider.future);
-    final nativeLanguage = profile?.nativeLanguage ?? 'Korean';
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-    await voiceNotifier.speakExample(widget.sentence, nativeLanguage);
+  Future<void> _speakSentence() async {
+    if (!mounted) return;
+    final nativeLanguage = ref.read(reviewNotifierProvider).nativeLanguage;
     _hasSpokenSentence = true;
+    await _voice.speakExample(widget.sentence, nativeLanguage);
   }
 
-  Future<void> _startListeningForTranslation() async {
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-    await voiceNotifier.startListeningTranslation(widget.item.language);
-  }
+  Future<void> _startListening() =>
+      _voice.startListeningTranslation(widget.item.language);
 
   void _handleMicTap() {
-    final voiceState = ref.read(voiceModeProvider);
-    final voiceNotifier = ref.read(voiceModeProvider.notifier);
-
-    if (voiceState.isListening) {
-      voiceNotifier.stop();
+    if (ref.read(voiceModeProvider).isListening) {
+      _voice.stop();
     } else {
-      _startListeningForTranslation();
+      _startListening();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final voiceState = ref.watch(voiceModeProvider);
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = context.l10n;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          LinearProgressIndicator(
-            value: widget.totalItems > 0
-                ? widget.currentIndex / widget.totalItems
-                : 0,
-            backgroundColor: AppColors.surfaceElevated,
-            color: AppColors.secondary,
+    return _ReviewPage(
+      children: [
+        _TranslationPrompt(
+          item: widget.item,
+          sentence: widget.sentence,
+          wordHint: widget.wordHint,
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        const Center(child: VoiceModeIndicator()),
+        const SizedBox(height: AppSpacing.lg),
+        Center(child: VoiceMicButton(onTap: _handleMicTap, size: 96)),
+        const SizedBox(height: AppSpacing.md),
+        Center(
+          child: Text(
+            voiceState.isListening
+                ? l10n.tapToStopListening
+                : l10n.tapMicToSpeak,
+            style: AppTypography.labelMedium,
           ),
-          const SizedBox(height: AppSpacing.xl),
-          Text(
-            l10n.translateInto(widget.item.language),
-            style: AppTypography.bodyMedium
-                .copyWith(color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceElevated,
-              borderRadius: AppRadius.largeBorder,
-              border: Border.all(color: AppColors.secondary.withAlpha(80)),
-            ),
-            child: Text(widget.sentence, style: AppTypography.bodyLarge),
-          ),
-          if (widget.wordHint != null && widget.wordHint!.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                const Icon(Icons.lightbulb_outline,
-                    size: 14, color: AppColors.textMuted),
-                const SizedBox(width: 4),
-                Text(
-                  l10n.hintUseWord(widget.wordHint!),
-                  style: AppTypography.bodySmall
-                      .copyWith(color: AppColors.textMuted),
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: AppSpacing.xl),
-          const Center(child: VoiceModeIndicator()),
-          const SizedBox(height: AppSpacing.lg),
-          Center(child: VoiceMicButton(onTap: _handleMicTap, size: 100)),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        const VoiceTranscriptDisplay(),
+        if (voiceState.currentTranscript.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.md),
-          Center(
-            child: Text(
-              voiceState.isListening
-                  ? l10n.tapToStopListening
-                  : l10n.tapMicToSpeak,
-              style: AppTypography.bodySmall
-                  .copyWith(color: AppColors.textMuted),
-            ),
+          FilledButton(
+            onPressed: () {
+              final transcript = voiceState.currentTranscript;
+              unawaited(_voice.stop());
+              _review.submitTranslation(transcript);
+            },
+            child: Text(l10n.submitTranslation),
           ),
-          if (voiceState.currentTranscript.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.lg),
-            Container(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceElevated,
-                borderRadius: AppRadius.mediumBorder,
-                border: Border.all(color: AppColors.textMuted.withAlpha(50)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.format_quote,
-                      size: 16, color: AppColors.textMuted),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    child: Text(
-                      voiceState.currentTranscript,
-                      style: AppTypography.bodyMedium.copyWith(
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            FilledButton(
-              onPressed: () {
-                ref.read(voiceModeProvider.notifier).stop();
-                ref
-                    .read(reviewNotifierProvider.notifier)
-                    .submitTranslation(voiceState.currentTranscript);
-              },
-              child: Text(l10n.submitTranslation),
-            ),
-          ],
         ],
-      ),
+      ],
     );
   }
 }

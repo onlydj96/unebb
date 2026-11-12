@@ -2,101 +2,89 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:unebb/core/l10n/l10n.dart';
 import 'package:unebb/core/theme/app_colors.dart';
 import 'package:unebb/core/theme/app_spacing.dart';
+import 'package:unebb/core/theme/app_tone.dart';
 import 'package:unebb/core/theme/app_typography.dart';
+import 'package:unebb/core/utils/logger.dart';
 import 'package:unebb/domain/models/deck.dart';
 import 'package:unebb/features/decks/providers/deck_providers.dart';
+import 'package:unebb/features/decks/widgets/deck_avatar.dart';
+import 'package:unebb/shared/utils/app_snackbar.dart';
+import 'package:unebb/shared/widgets/app_empty_state.dart';
+import 'package:unebb/shared/widgets/labels.dart';
 
 /// Screen displaying all decks for the current user.
 class DecksListScreen extends ConsumerWidget {
   const DecksListScreen({super.key});
 
+  Future<void> _refresh(BuildContext context, WidgetRef ref) async {
+    try {
+      await ref.read(deckNotifierProvider.notifier).refresh();
+    } catch (e) {
+      AppLogger.warning('Deck refresh failed', details: e);
+      if (context.mounted) {
+        AppSnackBar.showError(context, context.l10n.refreshFailed);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final decksAsync = ref.watch(deckNotifierProvider);
+    final l10n = context.l10n;
+    final decksAsync = ref.watch(deckListProvider);
+    final hasDecks = decksAsync.valueOrNull?.isNotEmpty ?? false;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('My Decks'),
-      ),
+      appBar: AppBar(title: Text(l10n.myDecks)),
       body: decksAsync.when(
+        skipLoadingOnReload: true,
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48),
-              const SizedBox(height: AppSpacing.md),
-              Text('Error loading decks: $e'),
-              const SizedBox(height: AppSpacing.md),
-              ElevatedButton(
-                onPressed: () => ref.invalidate(deckNotifierProvider),
-                child: const Text('Retry'),
-              ),
-            ],
-          ),
+        error: (e, _) => AppEmptyState(
+          icon: Icons.error_outline_rounded,
+          tone: AppTone.error,
+          title: l10n.errorLoadingDecks,
+          actions: [
+            FilledButton(
+              onPressed: () => ref.invalidate(deckNotifierProvider),
+              child: Text(l10n.retry),
+            ),
+          ],
         ),
         data: (decks) {
           if (decks.isEmpty) {
-            return _buildEmptyState(context);
+            return AppEmptyState(
+              icon: Icons.style_outlined,
+              title: l10n.noDecksYet,
+              message: l10n.noDecksDescription,
+              actions: [
+                FilledButton.icon(
+                  onPressed: () => context.push('/decks/create'),
+                  icon: const Icon(Icons.add_rounded),
+                  label: Text(l10n.createDeck),
+                ),
+              ],
+            );
           }
           return RefreshIndicator(
-            onRefresh: () async => ref.invalidate(deckNotifierProvider),
-            child: ListView.builder(
-              padding: const EdgeInsets.all(AppSpacing.md),
+            onRefresh: () => _refresh(context, ref),
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(20, AppSpacing.sm, 20, 112),
               itemCount: decks.length,
-              itemBuilder: (context, index) {
-                final deck = decks[index];
-                return _DeckCard(deck: deck);
-              },
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) => _DeckCard(deck: decks[index]),
             ),
           );
         },
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => context.push('/decks/create'),
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        child: const Icon(Icons.add),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.library_books_outlined,
-              size: 80,
-              color: AppColors.textMuted,
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            Text(
-              'No decks yet',
-              style: AppTypography.headingMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              'Create your first deck to start organizing your vocabulary.',
-              style: AppTypography.bodyMedium.copyWith(
-                color: AppColors.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: AppSpacing.xl),
-            ElevatedButton.icon(
+      floatingActionButton: hasDecks
+          ? FloatingActionButton.extended(
               onPressed: () => context.push('/decks/create'),
-              icon: const Icon(Icons.add),
-              label: const Text('Create Deck'),
-            ),
-          ],
-        ),
-      ),
+              icon: const Icon(Icons.add_rounded),
+              label: Text(l10n.createDeck),
+            )
+          : null,
     );
   }
 }
@@ -106,116 +94,108 @@ class _DeckCard extends ConsumerWidget {
 
   final Deck deck;
 
+  Future<void> _delete(BuildContext context, WidgetRef ref) async {
+    final l10n = context.l10n;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(l10n.deleteDeckTitle),
+        content: Text(l10n.deleteDeckMessage(deck.name)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: Text(l10n.delete),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    try {
+      await ref.read(deckNotifierProvider.notifier).deleteDeck(deck.id);
+    } catch (e, st) {
+      AppLogger.error('Deck delete failed', error: e, stackTrace: st);
+      if (context.mounted) AppSnackBar.showError(context, l10n.deleteFailed);
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
+    final description = deck.description;
+
     return Card(
-      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: InkWell(
         onTap: () => context.push('/decks/${deck.id}'),
-        borderRadius: BorderRadius.circular(12),
         child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
+          padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md, AppSpacing.md, AppSpacing.xs, AppSpacing.md),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                backgroundColor: AppColors.primary.withValues(alpha: 0.1),
-                radius: 24,
-                child: Text(
-                  deck.language.substring(0, 2).toUpperCase(),
-                  style: TextStyle(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.md),
+              DeckAvatar(language: deck.language, radius: 24),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       deck.name,
-                      style: AppTypography.bodyLarge.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: AppTypography.headingSmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    if (deck.description != null &&
-                        deck.description!.isNotEmpty)
+                    if (description != null && description.isNotEmpty)
                       Text(
-                        deck.description!,
+                        description,
                         style: AppTypography.bodySmall,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                    const SizedBox(height: AppSpacing.xs),
-                    Row(
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
                       children: [
-                        Icon(
-                          Icons.style,
-                          size: 14,
-                          color: AppColors.textMuted,
+                        TagPill(
+                          l10n.wordCount(deck.wordCount),
+                          icon: Icons.style_outlined,
                         ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${deck.wordCount} words',
-                          style: AppTypography.labelMedium,
-                        ),
-                        const SizedBox(width: AppSpacing.md),
-                        Icon(
-                          Icons.language,
-                          size: 14,
-                          color: AppColors.textMuted,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          deck.language,
-                          style: AppTypography.labelMedium,
-                        ),
+                        TagPill(deck.language, icon: Icons.translate_rounded),
                       ],
                     ),
                   ],
                 ),
               ),
               PopupMenuButton<String>(
-                onSelected: (value) async {
-                  if (value == 'delete') {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('Delete Deck?'),
-                        content: Text(
-                          'This will delete "${deck.name}" and all its words. This cannot be undone.',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, false),
-                            child: const Text('Cancel'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            style: TextButton.styleFrom(
-                              foregroundColor: AppColors.error,
-                            ),
-                            child: const Text('Delete'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirm == true) {
-                      await ref
-                          .read(deckNotifierProvider.notifier)
-                          .deleteDeck(deck.id);
-                    }
-                  }
+                icon: const Icon(
+                  Icons.more_vert_rounded,
+                  color: AppColors.textSecondary,
+                ),
+                onSelected: (value) {
+                  if (value == 'delete') _delete(context, ref);
                 },
                 itemBuilder: (_) => [
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: 'delete',
                     child: Row(
                       children: [
-                        Icon(Icons.delete, color: Colors.red),
-                        SizedBox(width: 8),
-                        Text('Delete'),
+                        const Icon(
+                          Icons.delete_outline_rounded,
+                          color: AppColors.error,
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          l10n.delete,
+                          style: AppTypography.bodyMedium.copyWith(
+                            color: AppColors.error,
+                          ),
+                        ),
                       ],
                     ),
                   ),

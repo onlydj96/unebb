@@ -1,13 +1,13 @@
 import 'package:unebb/domain/models/memory_state.dart';
 
 abstract interface class MemoryStateRepository {
+  /// All memory states of the current user (one row per vocabulary item).
+  ///
+  /// Review selection/ordering is done by `ReviewQueueBuilder` on top of this
+  /// single query, so the review screen needs one round trip instead of two.
   Future<List<MemoryState>> getAll();
-  Future<MemoryState?> getByVocabularyId(String vocabularyId);
-  Future<List<MemoryState>> getDueForReview();
-  Future<List<MemoryState>> getAllForReview(); // All words, prioritized
 
-  /// Get all vocabulary IDs that have memory_states for this user.
-  Future<Set<String>> getExistingVocabularyIds();
+  Future<MemoryState?> getByVocabularyId(String vocabularyId);
 
   Future<MemoryState> create({required String vocabularyId});
 

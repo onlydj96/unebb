@@ -31,7 +31,6 @@ abstract class MemoryState with _$MemoryState {
 
     /// SM-2: number of consecutive successful reviews
     @Default(0) int sm2Repetitions,
-
     required DateTime createdAt,
     required DateTime updatedAt,
   }) = _MemoryState;

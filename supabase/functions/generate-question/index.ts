@@ -1,5 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
+import { requireUser } from "../_shared/auth.ts";
+
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
 interface RequestBody {
@@ -46,10 +48,9 @@ Deno.serve(async (req: Request) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader) {
-    return new Response("Missing authorization", { status: 401 });
-  }
+  // Only signed-in users may spend OpenAI credit (the anon key used to pass).
+  const auth = await requireUser(req);
+  if (auth instanceof Response) return auth;
 
   let body: RequestBody;
   try {

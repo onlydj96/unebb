@@ -1,15 +1,21 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'package:unebb/data/repositories/base_supabase_repository.dart';
 import 'package:unebb/domain/models/user_error_pattern.dart';
 import 'package:unebb/domain/repositories/error_pattern_repository.dart';
 
-class SupabaseErrorPatternRepository implements ErrorPatternRepository {
-  const SupabaseErrorPatternRepository(this._client);
+class SupabaseErrorPatternRepository
+    with SupabaseRepositoryMixin
+    implements ErrorPatternRepository {
+  SupabaseErrorPatternRepository(this._client);
 
   final SupabaseClient _client;
 
-  static const _table = 'user_error_patterns';
+  @override
+  SupabaseClient get client => _client;
 
-  String get _userId => _client.auth.currentUser!.id;
+  @override
+  String get tableName => 'user_error_patterns';
 
   @override
   Future<List<UserErrorPattern>> getForWord({
@@ -17,9 +23,9 @@ class SupabaseErrorPatternRepository implements ErrorPatternRepository {
     int limit = 5,
   }) async {
     final rows = await _client
-        .from(_table)
+        .from(tableName)
         .select()
-        .eq('user_id', _userId)
+        .eq('user_id', userId)
         .eq('vocabulary_id', vocabularyId)
         .order('count', ascending: false)
         .limit(limit);
@@ -29,9 +35,9 @@ class SupabaseErrorPatternRepository implements ErrorPatternRepository {
   @override
   Future<List<UserErrorPattern>> getGlobal({int limit = 5}) async {
     final rows = await _client
-        .from(_table)
+        .from(tableName)
         .select()
-        .eq('user_id', _userId)
+        .eq('user_id', userId)
         .isFilter('vocabulary_id', null)
         .order('count', ascending: false)
         .limit(limit);
@@ -47,9 +53,9 @@ class SupabaseErrorPatternRepository implements ErrorPatternRepository {
 
     // Fetch all patterns for the given vocabulary IDs in one query
     final rows = await _client
-        .from(_table)
+        .from(tableName)
         .select()
-        .eq('user_id', _userId)
+        .eq('user_id', userId)
         .inFilter('vocabulary_id', vocabularyIds)
         .order('count', ascending: false);
 
@@ -80,9 +86,9 @@ class SupabaseErrorPatternRepository implements ErrorPatternRepository {
 
     // Batch fetch: get all existing patterns in one query
     final baseQuery = _client
-        .from(_table)
+        .from(tableName)
         .select('id, pattern_text, count')
-        .eq('user_id', _userId)
+        .eq('user_id', userId)
         .inFilter('pattern_text', patternTexts);
 
     final existingRows = vocabularyId != null
@@ -103,7 +109,7 @@ class SupabaseErrorPatternRepository implements ErrorPatternRepository {
       final existing = existingMap[text];
       if (existing == null) {
         toInsert.add({
-          'user_id': _userId,
+          'user_id': userId,
           if (vocabularyId != null) 'vocabulary_id': vocabularyId,
           'pattern_text': text,
           'count': 1,
@@ -120,12 +126,12 @@ class SupabaseErrorPatternRepository implements ErrorPatternRepository {
 
     // Execute batch operations in parallel
     await Future.wait([
-      if (toInsert.isNotEmpty) _client.from(_table).insert(toInsert),
+      if (toInsert.isNotEmpty) _client.from(tableName).insert(toInsert),
       // Updates must be done individually (Supabase limitation), but in parallel
       ...toUpdate.map((u) => _client
-          .from(_table)
-          .update({'count': u['count'], 'last_seen_at': u['last_seen_at']})
-          .eq('id', u['id'])),
+          .from(tableName)
+          .update({'count': u['count'], 'last_seen_at': u['last_seen_at']}).eq(
+              'id', u['id'])),
     ]);
   }
 }

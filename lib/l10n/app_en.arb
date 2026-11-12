@@ -1,6 +1,65 @@
 {
   "@@locale": "en",
 
+  "appTitle": "UnEbb",
+  "cancel": "Cancel",
+  "delete": "Delete",
+  "save": "Save",
+  "start": "Start",
+
+  "errorGeneric": "Something went wrong. Please try again.",
+  "errorNetwork": "No internet connection. Check your network and try again.",
+  "errorSessionExpired": "Your session has expired. Please sign in again.",
+  "errorAiUnavailable": "The AI service isn't responding right now. Please try again in a moment.",
+  "errorClockSync": "Your device clock is out of sync. Set date & time to automatic and try again.",
+  "errorRateLimited": "Too many requests. Please wait a moment and try again.",
+  "offlineBanner": "You're offline. Showing saved data.",
+  "offlineActionRequired": "An internet connection is required.",
+  "refreshFailed": "Couldn't refresh. Showing saved data.",
+
+  "navHome": "Home",
+  "navDecks": "Decks",
+  "navSettings": "Settings",
+
+  "dashboardGreeting": "Ready to learn?",
+  "dashboardSubtitle": "Review your vocabulary to strengthen your memory.",
+  "startReview": "Start Review",
+  "wordsDue": "{count, plural, =1{1 word due for review} other{{count} words due for review}}",
+  "@wordsDue": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "nothingDue": "Nothing due — review anyway to stay sharp!",
+  "yourProgress": "Your Progress",
+  "statDecks": "Decks",
+  "statWords": "Words",
+  "statMastered": "Mastered",
+  "recentDecks": "Recent Decks",
+  "seeAll": "See all",
+  "noDecksYet": "No decks yet",
+  "createFirstDeck": "Create your first deck to start learning!",
+  "createDeck": "Create Deck",
+  "wordCount": "{count, plural, =1{1 word} other{{count} words}}",
+  "@wordCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+
+  "reviewOptionsTitle": "Start review",
+  "deckReviewTitle": "Review deck",
+  "reviewWhichWords": "Which words do you want to review?",
+  "reviewDueOnly": "Due words only",
+  "reviewAllWords": "All words",
+  "reviewAllWordsSubtitle": "New and weakest words first",
+  "reviewHowMany": "How many words?",
+  "quickSelect": "Quick select",
+
   "review": "Review",
   "voiceMode": "Voice Mode",
   "voiceModeEnabled": "Voice mode enabled",
@@ -56,6 +115,7 @@
   "generatingExplanation": "Generating explanation…",
   "wordExplanation": "Word Explanation",
   "definition": "Definition",
+  "explanation": "Explanation",
   "examples": "Examples",
   "synonyms": "Synonyms",
   "collocations": "Collocations",
@@ -65,10 +125,25 @@
   "meaning": "Meaning",
   "usage": "Usage",
   "translation": "Translation",
+  "wordUsage": "Word usage",
+  "naturalness": "Naturalness",
   "grammar": "Grammar",
   "patternsToWatch": "Patterns to watch",
+  "focusArea": "Focus area: {point}",
+  "@focusArea": {
+    "placeholders": {
+      "point": {
+        "type": "String"
+      }
+    }
+  },
+  "memoryStrong": "Strong",
+  "memoryGood": "Good",
+  "memoryWeak": "Weak",
+  "memoryCritical": "Critical",
   "allCaughtUp": "All caught up!",
   "noDueWords": "No words are due for review right now.\nCome back later or add new words.",
+  "reviewAllInstead": "Review all words",
   "back": "Back",
   "sessionComplete": "Session complete!",
   "correctOutOf": "{correct} out of {total} correct",
@@ -84,5 +159,164 @@
   },
   "done": "Done",
   "retry": "Retry",
-  "finish": "Finish"
+  "skipWord": "Skip word",
+  "finish": "Finish",
+  "aiContentMissing": "The AI explanation for this word isn't available yet.",
+  "resumeSession": "Resume Session",
+  "resumeSessionTitle": "Continue Previous Session?",
+  "resumeSessionMessage": "You have an unfinished review session with {remaining} words remaining ({completed} already completed).",
+  "@resumeSessionMessage": {
+    "placeholders": {
+      "remaining": {
+        "type": "int"
+      },
+      "completed": {
+        "type": "int"
+      }
+    }
+  },
+  "continueSession": "Continue",
+  "startNewSession": "Start New",
+
+  "myDecks": "My Decks",
+  "errorLoadingDecks": "Couldn't load your decks.",
+  "noDecksDescription": "Create your first deck to start organizing your vocabulary.",
+  "deleteDeckTitle": "Delete deck?",
+  "deleteDeckMessage": "This will delete \"{name}\" and all its words. This cannot be undone.",
+  "@deleteDeckMessage": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "deleteFailed": "Couldn't delete. Please try again.",
+  "deckNotFound": "Deck not found",
+  "noWordsYet": "No words yet",
+  "addFirstWordToDeck": "Add your first word to this deck.",
+  "addWord": "Add Word",
+  "deckName": "Deck name",
+  "deckNameHint": "e.g., TOEIC Vocabulary",
+  "deckNameRequired": "Please enter a deck name",
+  "deckDescription": "Description (optional)",
+  "deckDescriptionHint": "What is this deck for?",
+  "duplicateDeckName": "A deck named \"{name}\" already exists.",
+  "@duplicateDeckName": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "language": "Language",
+  "learningLanguage": "Learning language",
+  "nativeLanguage": "Native language",
+
+  "allWords": "All Words",
+  "noWordsHint": "No words yet.\nAdd your first word to get started.",
+  "errorLoadingWords": "Couldn't load your words.",
+  "wordOrPhrase": "Word or phrase",
+  "wordHintExample": "e.g. ephemeral",
+  "wordRequired": "Please enter a word",
+  "editWord": "Edit Word",
+  "saveChanges": "Save changes",
+  "deleteWordTitle": "Delete word?",
+  "deleteWordMessage": "Remove \"{word}\" from your vocabulary? This cannot be undone.",
+  "@deleteWordMessage": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "wordNotFound": "Word not found.",
+  "wordDetail": "Word Detail",
+  "aiGenerating": "AI explanation is being generated…",
+  "aiFailed": "Couldn't generate the AI explanation.",
+  "aiMissing": "This word doesn't have an AI explanation yet.",
+  "generateExplanation": "Generate explanation",
+  "feedback": "Feedback",
+  "wordAddedTitle": "Word Added",
+  "wordAddedSuccess": "\"{word}\" has been added to your vocabulary!",
+  "@wordAddedSuccess": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "practiceNow": "Practice Now",
+  "duplicateWordError": "The word \"{word}\" already exists in this deck.",
+  "@duplicateWordError": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      }
+    }
+  },
+  "duplicateWordInDeck": "\"{word}\" is already in the \"{deck}\" deck.",
+  "@duplicateWordInDeck": {
+    "placeholders": {
+      "word": {
+        "type": "String"
+      },
+      "deck": {
+        "type": "String"
+      }
+    }
+  },
+  "duplicateWordErrorGeneral": "This word already exists in your vocabulary.",
+
+  "tagline": "Adaptive vocabulary learning",
+  "signIn": "Sign in",
+  "email": "Email",
+  "password": "Password",
+  "noAccountSignUp": "Don't have an account? Sign up",
+  "createAccount": "Create account",
+  "emailInvalid": "Enter a valid email address",
+  "passwordTooShort": "Password must be at least 6 characters",
+  "checkEmailToConfirm": "Check your email and confirm your account, then sign in.",
+  "invalidCredentials": "Incorrect email or password.",
+  "emailNotConfirmed": "Please confirm your email address first.",
+  "userAlreadyExists": "An account with this email already exists.",
+  "setUpProfile": "Set up your profile",
+  "editProfile": "Edit profile",
+  "profileSubtitle": "This helps UnEbb personalise your experience.",
+  "displayName": "Display name",
+  "displayNameRequired": "Please enter your display name.",
+  "startLearning": "Start learning",
+
+  "settings": "Settings",
+  "account": "Account",
+  "signOut": "Sign out",
+  "signOutConfirmTitle": "Sign out?",
+  "signOutConfirmMessage": "Are you sure you want to sign out?",
+  "about": "About",
+  "version": "Version",
+  "nativeShort": "Native",
+  "learningShort": "Learning",
+
+  "greetingName": "Hi, {name}",
+  "@greetingName": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "dueNowLabel": "{count, plural, =1{word ready to review} other{words ready to review}}",
+  "@dueNowLabel": {
+    "description": "Shown next to a large due-word count on the dashboard.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "memoryHealth": "Memory health",
+  "addFirstWord": "Add your first word to get started.",
+  "addWordHelper": "AI writes the definition, examples and common mistakes for you.",
+  "answerIncorrect": "Not quite",
+  "verdictPass": "Nice recall",
+  "verdictFail": "Keep practicing"
 }

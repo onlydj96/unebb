@@ -57,6 +57,9 @@ dependencies:
   # Network connectivity
   connectivity_plus: ^6.1.2
 
+  # Local cache
+  shared_preferences: ^2.3.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -76,12 +79,19 @@ dev_dependencies:
   # App icon generator
   flutter_launcher_icons: ^0.14.3
 
+# Sources are derived from the designer's assets/logo/icon.png (corners filled,
+# content fitted to the adaptive-icon safe zone). Regenerate with:
+#   dart run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "logo.png"
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "logo.png"
+  image_path: "assets/logo/app_icon.png"
+  remove_alpha_ios: true
+  adaptive_icon_background: "#FDFAFA"
+  adaptive_icon_foreground: "assets/logo/app_icon_foreground.png"
+  adaptive_icon_monochrome: "assets/logo/app_icon_monochrome.png"
+  # The foreground is already fitted to the safe zone; no extra inset.
+  adaptive_icon_foreground_inset: 0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -96,6 +106,23 @@ flutter:
 
   # Internationalization
   generate: true
+
+  # Bundled fonts (SIL OFL 1.1, licences in assets/fonts/OFL-*.txt):
+  # - Fraunces: serif for vocabulary words and numerals.
+  #   Static instances: opsz 48 / wght 600, opsz 24 italic.
+  # - Nunito Black: the "UnEbb" wordmark (as specified in assets/logo/logo.svg).
+  fonts:
+    - family: Fraunces
+      fonts:
+        - asset: assets/fonts/Fraunces-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Fraunces-Italic.ttf
+          weight: 400
+          style: italic
+    - family: Nunito
+      fonts:
+        - asset: assets/fonts/Nunito-Black.ttf
+          weight: 900
 
   # To add assets to your application, add an assets section, like this:
   # assets:

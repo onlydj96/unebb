@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="UnEbb logo">
+<rect width="1024" height="1024" rx="230" fill="#FFFDFC"/>
+<!-- memory transition -->
+<path d="M374 259 Q401 234 428 226" fill="none" stroke="#E8A4A5" stroke-width="36" stroke-linecap="round"/>
+<path d="M474 215 Q511 204 548 215" fill="none" stroke="#B7D8BE" stroke-width="40" stroke-linecap="round"/>
+<path d="M591 226 Q629 236 652 260" fill="none" stroke="#73C09C" stroke-width="42" stroke-linecap="round"/>
+<circle cx="300" cy="306" r="59" fill="#B23B40"/>
+<path d="M281 287 L319 325 M319 287 L281 325" fill="none" stroke="#FFFDFC" stroke-width="16" stroke-linecap="round"/>
+<circle cx="722" cy="306" r="59" fill="#57B589"/>
+<path d="M696 306 L714 326 L750 284" fill="none" stroke="#FFFDFC" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+<!-- book base -->
+<path d="M314 405 Q277 399 264 433 L231 589 Q222 622 252 629 Q375 589 483 657 Q506 678 518 666 Q630 585 766 629 Q797 637 792 601 L765 434 Q756 405 718 405 L734 584 Q609 552 513 629 Q417 550 290 584 Z" fill="#4E3029"/>
+<!-- paper white rim -->
+<path d="M338 388 Q427 385 503 470 L503 604 Q412 540 285 570 L314 413 Q319 393 338 388Z" fill="#FFFDFC"/>
+<path d="M686 388 Q597 385 521 470 L521 604 Q612 540 739 570 L710 413 Q705 393 686 388Z" fill="#FFFDFC"/>
+<!-- colored pages -->
+<path d="M362 363 Q437 363 503 446 L503 596 Q428 532 312 546 L339 387 Q344 363 362 363Z" fill="#B23B40"/>
+<path d="M662 363 Q587 363 521 446 L521 596 Q596 532 712 546 L685 387 Q680 363 662 363Z" fill="#73C09C"/>
+<!-- wordmark -->
+<text x="512" y="855" text-anchor="middle" font-family="Nunito, Arial Rounded MT Bold, Arial, sans-serif" font-size="190" font-weight="900" letter-spacing="-8"><tspan fill="#4E3029">Un</tspan><tspan fill="#B23B40">Ebb</tspan></text>
+</svg>

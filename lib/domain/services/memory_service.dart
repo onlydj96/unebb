@@ -95,8 +95,7 @@ class MemoryService {
 
     final newStrength = strengthFromInterval(interval);
     final newStage = stageFromStrength(newStrength);
-    final nextReview =
-        DateTime.now().toUtc().add(Duration(days: interval));
+    final nextReview = DateTime.now().toUtc().add(Duration(days: interval));
 
     return state.copyWith(
       easeFactor: ef,
@@ -109,8 +108,7 @@ class MemoryService {
       nextReviewAt: nextReview,
       reviewCount: state.reviewCount + 1,
       correctCount: correct ? state.correctCount + 1 : state.correctCount,
-      incorrectCount:
-          correct ? state.incorrectCount : state.incorrectCount + 1,
+      incorrectCount: correct ? state.incorrectCount : state.incorrectCount + 1,
       consecutiveCorrect: correct ? state.consecutiveCorrect + 1 : 0,
     );
   }

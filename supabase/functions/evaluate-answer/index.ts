@@ -1,5 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
+import { requireUser } from "../_shared/auth.ts";
+
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
 interface RequestBody {
@@ -83,24 +85,84 @@ Scoring guidance:
 - 0.0–0.3: Fundamental misunderstanding`;
 }
 
-function buildTranslationPrompt(body: RequestBody, nativeLanguage: string): string {
-  const wordCheckNote = body.language === "Japanese"
-    ? `
-🚨 JAPANESE LANGUAGE CRITICAL RULE 🚨
-Japanese does NOT use spaces between words. To check if "${body.word}" is used:
-1. Search for the exact kanji/hiragana characters "${body.word}" as a SUBSTRING anywhere in the sentence
-2. Examples for word "相手":
-   ✅ "相手がいる" - CORRECT (word + particle)
-   ✅ "相手を探す" - CORRECT (word + particle)
-   ✅ "相手と話す" - CORRECT (word + particle)
-   ✅ "相手に連絡" - CORRECT (word + particle)
-3. DO NOT look for word boundaries or spaces
-4. DO NOT require the word to be isolated
-5. If you find "${body.word}" as a substring, the learner HAS used the word
+/**
+ * Checks if the target word (or a variant) is present in the user's answer.
+ * - For Japanese/Chinese/Korean: substring match (no word boundaries)
+ * - For other languages: word boundary match with common conjugations
+ */
+function checkWordUsage(word: string, userAnswer: string, language: string): { found: boolean; matchedForm: string | null } {
+  const answer = userAnswer.toLowerCase();
+  const targetWord = word.toLowerCase();
 
-IMPORTANT: Before evaluating, use Ctrl+F or substring search to verify "${body.word}" appears in "${body.user_answer}".
-If the characters "${body.word}" exist anywhere in the translation, the word IS used.`
-    : "";
+  // For CJK languages, do simple substring match
+  if (["Japanese", "Chinese", "Korean"].includes(language)) {
+    if (answer.includes(targetWord)) {
+      return { found: true, matchedForm: word };
+    }
+    return { found: false, matchedForm: null };
+  }
+
+  // For alphabetic languages, check word with boundaries
+  // First, try exact match
+  const wordBoundaryRegex = new RegExp(`\\b${targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+  if (wordBoundaryRegex.test(userAnswer)) {
+    return { found: true, matchedForm: word };
+  }
+
+  // For phrases like "be subject to", check each word
+  const wordParts = targetWord.split(/\s+/);
+  if (wordParts.length > 1) {
+    // Check if the main content words are present (skip "be", "a", "the", etc.)
+    const contentWords = wordParts.filter(w => !["be", "a", "an", "the", "to", "of", "in", "on", "at"].includes(w));
+    const allContentWordsFound = contentWords.every(cw => {
+      const cwRegex = new RegExp(`\\b${cw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+      return cwRegex.test(userAnswer);
+    });
+    if (allContentWordsFound && contentWords.length > 0) {
+      return { found: true, matchedForm: contentWords.join(" ") };
+    }
+  }
+
+  // Check common verb conjugations
+  const verbEndings = ["s", "es", "ed", "ing", "er", "est", "ly"];
+  for (const ending of verbEndings) {
+    const conjugated = targetWord + ending;
+    const conjRegex = new RegExp(`\\b${conjugated.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (conjRegex.test(userAnswer)) {
+      return { found: true, matchedForm: conjugated };
+    }
+  }
+
+  // Check irregular forms for common verbs
+  const irregularForms: Record<string, string[]> = {
+    "be": ["is", "am", "are", "was", "were", "been", "being"],
+    "have": ["has", "had", "having"],
+    "do": ["does", "did", "doing", "done"],
+    "go": ["goes", "went", "going", "gone"],
+  };
+
+  if (irregularForms[targetWord]) {
+    for (const form of irregularForms[targetWord]) {
+      const formRegex = new RegExp(`\\b${form}\\b`, 'i');
+      if (formRegex.test(userAnswer)) {
+        return { found: true, matchedForm: form };
+      }
+    }
+  }
+
+  return { found: false, matchedForm: null };
+}
+
+function buildTranslationPrompt(body: RequestBody, nativeLanguage: string, wordCheckResult: { found: boolean; matchedForm: string | null }): string {
+  // Inform AI about the actual word check result
+  const wordVerificationNote = wordCheckResult.found
+    ? `
+✅ VERIFIED BY SYSTEM: The target word "${body.word}" WAS FOUND in the learner's translation (matched form: "${wordCheckResult.matchedForm}").
+DO NOT claim the word is missing. The learner DID use the target word. Give appropriate credit for usage_score (at least 0.7).`
+    : `
+❌ VERIFIED BY SYSTEM: The target word "${body.word}" was NOT FOUND in the learner's translation.
+The system performed an exact search and confirmed the word is missing. Set usage_score to 0.0-0.3.
+You MUST provide example sentences showing how to use "${body.word}" correctly.`;
 
   return `You are an expert ${body.language} teacher providing detailed, constructive feedback on a learner's translation.
 
@@ -111,30 +173,17 @@ Learner's ${body.language} translation: "${body.user_answer}"
 
 The learner's native language is ${nativeLanguage}. ALL feedback and weak_point MUST be written in ${nativeLanguage}.
 ${buildKnownPatternsBlock(body.known_patterns)}
-${wordCheckNote}
+${wordVerificationNote}
 
-CRITICAL EVALUATION RULES:
-1. The target word/phrase "${body.word}" may be given in its base/infinitive form (e.g., "be subject to")
-2. The learner MUST use this word/phrase, but may need to conjugate/adapt it for grammar (e.g., "is subject to", "was subject to", "are subject to")
-3. ACCEPT grammatically correct variations of the target word/phrase:
-   - Verb conjugations: "be" → "is/am/are/was/were/been/being"
-   - Tense changes: "run" → "runs/ran/running"
-   - Subject-verb agreement: "he is subject to" (NOT "he be subject to")
-4. DO NOT penalize correct grammatical adaptations of the target word/phrase
-5. The learner deserves FULL credit if they use the target word/phrase with correct grammar
+CRITICAL: The system has ALREADY verified word usage above. Trust this verification completely.
 
 Your task:
-1. **FIRST**: Check if "${body.word}" appears in the translation "${body.user_answer}"
-   - For Japanese: Search for "${body.word}" as a SUBSTRING (不要空格檢查)
-   - For other languages: Check for the word or its grammatically correct conjugations
-   - If found: Proceed with evaluation
-   - If NOT found: Mark usage_score as 0.0-0.3 and provide example sentences
-2. Analyze the translation for meaning accuracy, word usage, grammar, and naturalness
-3. Provide SPECIFIC, DETAILED feedback on what works and what doesn't
-4. Explain grammatical errors with examples
-5. Suggest more natural alternatives when applicable
-6. **ALWAYS provide an IDEAL/NATIVE-LIKE translation** at the end of the feedback
-7. CRITICAL: If the learner did NOT use "${body.word}" at all in their translation, you MUST provide example sentences that correctly use "${body.word}" in the feedback
+1. Analyze the translation for meaning accuracy, word usage, grammar, and naturalness
+2. Provide SPECIFIC, DETAILED feedback on what works and what doesn't
+3. Explain grammatical errors with examples
+4. Suggest more natural alternatives when applicable
+5. **ALWAYS provide an IDEAL/NATIVE-LIKE translation** at the end of the feedback
+6. CRITICAL: If the learner did NOT use "${body.word}" at all in their translation, you MUST provide example sentences that correctly use "${body.word}" in the feedback
 
 Return a JSON object with exactly these fields:
 {
@@ -194,10 +243,9 @@ Deno.serve(async (req: Request) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader) {
-    return new Response("Missing authorization", { status: 401 });
-  }
+  // Only signed-in users may spend OpenAI credit (the anon key used to pass).
+  const auth = await requireUser(req);
+  if (auth instanceof Response) return auth;
 
   let body: RequestBody;
   try {
@@ -206,10 +254,13 @@ Deno.serve(async (req: Request) => {
     return new Response("Invalid JSON body", { status: 400 });
   }
 
-  const { word, language, definition, user_answer, answer_type } = body;
-  if (!word || !language || !definition || !user_answer || !answer_type) {
+  const { word, language, user_answer, answer_type } = body;
+  if (!word || !language || !user_answer || !answer_type) {
     return new Response("Missing required fields", { status: 400 });
   }
+  // A word whose AI explanation failed has no definition yet; evaluate it
+  // with the model's own knowledge instead of failing the review (400).
+  body.definition = body.definition?.trim() || "(no reference definition available)";
 
   // Resolve eval type: new field takes priority, legacy field as fallback
   const evalType: "meaning" | "translation" =
@@ -230,8 +281,13 @@ Deno.serve(async (req: Request) => {
 
   const nativeLanguage = body.native_language || "Korean";
 
+  // For translation evaluation, check word usage programmatically
+  const wordCheckResult = evalType === "translation"
+    ? checkWordUsage(word, user_answer, language)
+    : { found: true, matchedForm: null }; // Not relevant for meaning check
+
   const userPrompt = evalType === "translation"
-    ? buildTranslationPrompt(body, nativeLanguage)
+    ? buildTranslationPrompt(body, nativeLanguage, wordCheckResult)
     : buildMeaningPrompt(body, nativeLanguage);
 
   const openaiRes = await fetch(OPENAI_URL, {
@@ -241,8 +297,7 @@ Deno.serve(async (req: Request) => {
       Authorization: `Bearer ${openaiKey}`,
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
-      temperature: 0.1,
+      model: "gpt-5.6-luna",
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },

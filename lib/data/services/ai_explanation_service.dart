@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:unebb/domain/models/vocabulary_item.dart';
@@ -13,6 +15,7 @@ class AiExplanationService {
   final SupabaseClient _client;
 
   static const _function = 'generate-explanation';
+  static const _timeout = Duration(seconds: 60);
 
   Future<VocabularyItem> generateExplanation({
     required String vocabularyId,
@@ -28,6 +31,12 @@ class AiExplanationService {
         'language': language,
         'native_language': nativeLanguage,
       },
+    ).timeout(
+      _timeout,
+      onTimeout: () => throw TimeoutException(
+        'AI explanation generation timed out after ${_timeout.inSeconds}s',
+        _timeout,
+      ),
     );
 
     if (response.status != 200) {

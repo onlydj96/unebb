@@ -10,15 +10,19 @@ part 'ai_evaluation.g.dart';
 @freezed
 abstract class AiEvaluation with _$AiEvaluation {
   const factory AiEvaluation({
-    required double meaningScore,
-    required double usageScore,
-    required double exampleScore,
-    required double grammarScore,
-    required double overallScore,
-    required String feedback,
+    @Default(0.0) double meaningScore,
+    @Default(0.0) double usageScore,
+    @Default(0.0) double exampleScore,
+    @Default(0.0) double grammarScore,
+    @Default(0.0) double overallScore,
+    @Default('') String feedback,
     String? weakPoint,
     @Default([]) List<String> detectedPatterns,
   }) = _AiEvaluation;
+
+  /// Creates an empty evaluation with default values.
+  /// Used when AI evaluation data is missing or invalid.
+  static const empty = AiEvaluation();
 
   factory AiEvaluation.fromJson(Map<String, dynamic> json) =>
       _$AiEvaluationFromJson(json);

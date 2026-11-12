@@ -2,12 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:unebb/core/l10n/l10n.dart';
 import 'package:unebb/core/theme/app_colors.dart';
-import 'package:unebb/core/theme/app_radius.dart';
 import 'package:unebb/core/theme/app_spacing.dart';
+import 'package:unebb/core/theme/app_tone.dart';
 import 'package:unebb/core/theme/app_typography.dart';
+import 'package:unebb/core/utils/logger.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
+import 'package:unebb/features/vocabulary/providers/ai_content_provider.dart';
 import 'package:unebb/features/vocabulary/providers/vocabulary_providers.dart';
+import 'package:unebb/shared/utils/app_snackbar.dart';
+import 'package:unebb/shared/widgets/app_empty_state.dart';
+import 'package:unebb/shared/widgets/app_notice.dart';
+import 'package:unebb/shared/widgets/labels.dart';
+import 'package:unebb/shared/widgets/memory_indicator.dart';
+import 'package:unebb/shared/widgets/word_content.dart';
 
 /// Displays full details of a single vocabulary item, including AI content.
 class WordDetailScreen extends ConsumerWidget {
@@ -15,146 +24,170 @@ class WordDetailScreen extends ConsumerWidget {
 
   final String wordId;
 
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final itemAsync = ref.watch(vocabularyItemProvider(wordId));
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Word Detail'),
-        actions: [
-          itemAsync.whenOrNull(
-                data: (item) => item != null
-                    ? IconButton(
-                        icon: const Icon(Icons.edit_outlined),
-                        tooltip: 'Edit word',
-                        onPressed: () => context.push('/words/${item.id}/edit'),
-                      )
-                    : null,
-              ) ??
-              const SizedBox.shrink(),
-          itemAsync.whenOrNull(
-                data: (item) => item != null
-                    ? IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        tooltip: 'Delete word',
-                        onPressed: () => _confirmDelete(context, ref, item),
-                      )
-                    : null,
-              ) ??
-              const SizedBox.shrink(),
-        ],
-      ),
-      body: itemAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (item) {
-          if (item == null) {
-            return const Center(child: Text('Word not found.'));
-          }
-          return _WordDetailBody(item: item);
-        },
-      ),
-    );
-  }
-
   Future<void> _confirmDelete(
     BuildContext context,
     WidgetRef ref,
     VocabularyItem item,
   ) async {
+    final l10n = context.l10n;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete word?'),
-        content: Text(
-          'Remove "${item.word}" from your vocabulary? This cannot be undone.',
-        ),
+        title: Text(l10n.deleteWordTitle),
+        content: Text(l10n.deleteWordMessage(item.word)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
+            child: Text(l10n.cancel),
           ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: AppColors.error,
-            ),
+          TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Delete'),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: Text(l10n.delete),
           ),
         ],
       ),
     );
-    if (confirmed == true && context.mounted) {
+    if (confirmed != true || !context.mounted) return;
+
+    try {
       await ref.read(vocabularyNotifierProvider.notifier).deleteWord(item.id);
-      if (context.mounted) Navigator.of(context).pop();
+      if (context.mounted) context.pop();
+    } catch (e, st) {
+      AppLogger.error('Deleting word failed', error: e, stackTrace: st);
+      if (context.mounted) AppSnackBar.showError(context, l10n.deleteFailed);
     }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
+    final itemAsync = ref.watch(vocabularyItemProvider(wordId));
+    final item = itemAsync.valueOrNull;
+
+    return Scaffold(
+      appBar: AppBar(
+        actions: [
+          if (item != null) ...[
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: l10n.editWord,
+              onPressed: () async {
+                final deleted =
+                    await context.push<bool>('/words/${item.id}/edit');
+                // The word was deleted from the edit screen: leave as well.
+                if (deleted == true && context.mounted) context.pop();
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded),
+              tooltip: l10n.delete,
+              onPressed: () => _confirmDelete(context, ref, item),
+            ),
+            const SizedBox(width: AppSpacing.xs),
+          ],
+        ],
+      ),
+      body: itemAsync.when(
+        skipLoadingOnReload: true,
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => AppEmptyState(
+          icon: Icons.error_outline_rounded,
+          tone: AppTone.error,
+          title: l10n.errorLoadingWords,
+        ),
+        data: (item) => item == null
+            ? AppEmptyState(
+                icon: Icons.search_off_rounded,
+                title: l10n.wordNotFound,
+              )
+            : _WordDetailBody(item: item),
+      ),
+    );
   }
 }
 
-class _WordDetailBody extends StatelessWidget {
+class _WordDetailBody extends ConsumerWidget {
   const _WordDetailBody({required this.item});
 
   final VocabularyItem item;
 
   @override
-  Widget build(BuildContext context) {
-    final hasAi = item.definition != null;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
+    final memory =
+        ref.watch(memoryStatesMapNotifierProvider).valueOrNull?[item.id];
+    final pronunciation = item.pronunciation;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, AppSpacing.xxl),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Word header
-          Text(item.word, style: AppTypography.displayMedium),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            item.language,
-            style: AppTypography.bodyMedium.copyWith(
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-
-          if (!hasAi) ...[
-            Container(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceElevated,
-                borderRadius: AppRadius.mediumBorder,
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.hourglass_empty, size: 20),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    child: Text(
-                      'AI explanation is being generated…',
-                      style: AppTypography.bodyMedium.copyWith(
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ),
-                ],
+          TagPill(item.language, icon: Icons.translate_rounded),
+          const SizedBox(height: 14),
+          Text(item.word, style: AppTypography.displayLarge),
+          if (pronunciation != null && pronunciation.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(pronunciation, style: AppTypography.pronunciation),
+          ],
+          if (memory != null && memory.reviewCount > 0) ...[
+            const SizedBox(height: AppSpacing.lg),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                child: MemoryIndicator(
+                  strength: memory.memoryStrength,
+                  showLabel: true,
+                  height: 6,
+                ),
               ),
             ),
-          ] else ...[
-            _Section(title: 'Definition', content: item.definition!),
-            if (item.explanation != null)
-              _Section(title: 'Explanation', content: item.explanation!),
-            if (item.usage != null)
-              _Section(title: 'Usage', content: item.usage!),
-            if (item.examples?.isNotEmpty == true)
-              _ListSection(title: 'Examples', items: item.examples!),
-            if (item.synonyms?.isNotEmpty == true)
-              _ListSection(title: 'Synonyms', items: item.synonyms!),
-            if (item.collocations?.isNotEmpty == true)
-              _ListSection(title: 'Collocations', items: item.collocations!),
-            if (item.commonMistakes?.isNotEmpty == true)
-              _ListSection(
-                title: 'Common Mistakes',
-                items: item.commonMistakes!,
+          ],
+          const SizedBox(height: AppSpacing.xl),
+          if (!hasAiContent(item))
+            AiContentStatusPanel(item: item)
+          else ...[
+            _Section(
+              title: l10n.definition,
+              child: Text(
+                item.definition!,
+                style: AppTypography.bodyLarge.copyWith(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            if (item.explanation?.isNotEmpty ?? false)
+              _Section(
+                title: l10n.explanation,
+                child: Text(item.explanation!, style: AppTypography.bodyLarge),
+              ),
+            if (item.usage?.isNotEmpty ?? false)
+              _Section(
+                title: l10n.usage,
+                child: Text(item.usage!, style: AppTypography.bodyLarge),
+              ),
+            if (item.examples?.isNotEmpty ?? false)
+              _Section(
+                title: l10n.examples,
+                child: QuoteList(items: item.examples!),
+              ),
+            if (item.synonyms?.isNotEmpty ?? false)
+              _Section(
+                title: l10n.synonyms,
+                child: WordChips(items: item.synonyms!),
+              ),
+            if (item.collocations?.isNotEmpty ?? false)
+              _Section(
+                title: l10n.collocations,
+                child: WordChips(items: item.collocations!),
+              ),
+            if (item.commonMistakes?.isNotEmpty ?? false)
+              _Section(
+                title: l10n.commonMistakes,
+                color: AppColors.error,
+                child: MistakeList(items: item.commonMistakes!),
               ),
           ],
         ],
@@ -163,78 +196,68 @@ class _WordDetailBody extends StatelessWidget {
   }
 }
 
-class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.content});
+/// Shown while a word has no AI content: a progress note while generating,
+/// otherwise the reason plus a button to (re)generate it.
+class AiContentStatusPanel extends ConsumerWidget {
+  const AiContentStatusPanel({super.key, required this.item});
 
-  final String title;
-  final String content;
+  final VocabularyItem item;
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: AppTypography.labelLarge.copyWith(
-              color: AppColors.textSecondary,
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
+    final status = ref.watch(aiContentStatusProvider(item.id));
+    final generating = status == AiContentStatus.generating;
+    final failed = status == AiContentStatus.failed;
+
+    return AppNotice(
+      tone: failed ? AppTone.error : AppTone.neutral,
+      leading: generating
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : null,
+      icon: failed ? Icons.error_outline_rounded : Icons.auto_awesome_outlined,
+      message: switch (status) {
+        AiContentStatus.generating => l10n.aiGenerating,
+        AiContentStatus.failed => l10n.aiFailed,
+        null => l10n.aiMissing,
+      },
+      action: generating
+          ? null
+          : OutlinedButton.icon(
+              onPressed: () =>
+                  ref.read(aiContentProvider.notifier).ensure(item),
+              icon: const Icon(Icons.auto_awesome),
+              label: Text(l10n.generateExplanation),
             ),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          Text(content, style: AppTypography.bodyLarge),
-        ],
-      ),
     );
   }
 }
 
-class _ListSection extends StatelessWidget {
-  const _ListSection({required this.title, required this.items});
+class _Section extends StatelessWidget {
+  const _Section({
+    required this.title,
+    required this.child,
+    this.color = AppColors.textSecondary,
+  });
 
   final String title;
-  final List<String> items;
+  final Widget child;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+      padding: const EdgeInsets.only(bottom: 28),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            title,
-            style: AppTypography.labelLarge.copyWith(
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          ...items.map(
-            (item) => Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding:
-                        const EdgeInsets.only(top: 6, right: AppSpacing.sm),
-                    child: Container(
-                      width: 6,
-                      height: 6,
-                      decoration: const BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(item, style: AppTypography.bodyLarge),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          SectionLabel(title, color: color),
+          const SizedBox(height: 10),
+          child,
         ],
       ),
     );

@@ -1,33 +1,38 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:unebb/core/theme/app_colors.dart';
-import 'package:unebb/core/theme/app_spacing.dart';
-import 'package:unebb/core/theme/app_typography.dart';
-import 'package:unebb/features/auth/providers/auth_provider.dart';
 
-class ProfileSetupScreen extends StatefulWidget {
+import 'package:unebb/core/constants/languages.dart';
+import 'package:unebb/core/l10n/l10n.dart';
+import 'package:unebb/core/services/cache_service.dart';
+import 'package:unebb/core/theme/app_spacing.dart';
+import 'package:unebb/core/theme/app_tone.dart';
+import 'package:unebb/core/utils/error_messages.dart';
+import 'package:unebb/core/utils/logger.dart';
+import 'package:unebb/features/auth/providers/auth_provider.dart';
+import 'package:unebb/features/auth/providers/profile_provider.dart';
+import 'package:unebb/features/auth/widgets/auth_header.dart';
+import 'package:unebb/shared/widgets/app_notice.dart';
+import 'package:unebb/shared/widgets/language_dropdown.dart';
+import 'package:unebb/shared/widgets/loading_button.dart';
+
+/// First-run profile setup; also used to edit the profile from Settings
+/// (fields are prefilled when a profile exists).
+class ProfileSetupScreen extends ConsumerStatefulWidget {
   const ProfileSetupScreen({super.key});
 
   @override
-  State<ProfileSetupScreen> createState() => _ProfileSetupScreenState();
+  ConsumerState<ProfileSetupScreen> createState() => _ProfileSetupScreenState();
 }
 
-class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
+class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
+  final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
-  String _nativeLanguage = 'Korean';
-  String _learningLanguage = 'English';
+  String _nativeLanguage = SupportedLanguages.defaultNative;
+  String _learningLanguage = SupportedLanguages.defaultLearning;
   bool _loading = false;
+  bool _prefilled = false;
   String? _error;
-
-  static const _languages = [
-    'English',
-    'Korean',
-    'Japanese',
-    'Chinese',
-    'Spanish',
-    'French',
-    'German',
-  ];
 
   @override
   void dispose() {
@@ -35,24 +40,50 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     super.dispose();
   }
 
+  void _prefill(UserProfile? profile) {
+    if (_prefilled || profile == null) return;
+    _prefilled = true;
+    _nameCtrl.text = profile.displayName;
+    _nativeLanguage = profile.nativeLanguage;
+    _learningLanguage = profile.learningLanguage;
+  }
+
   Future<void> _save() async {
-    if (_nameCtrl.text.trim().isEmpty) {
-      setState(() => _error = 'Please enter your display name.');
-      return;
-    }
+    if (_loading || !_formKey.currentState!.validate()) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
+      final displayName = _nameCtrl.text.trim();
       await upsertProfile(
-        displayName: _nameCtrl.text.trim(),
+        displayName: displayName,
         nativeLanguage: _nativeLanguage,
         learningLanguage: _learningLanguage,
       );
-      if (mounted) context.go('/');
-    } on Exception catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      // Cache first so the reloaded profile is available immediately and the
+      // router does not bounce back here while it reloads.
+      final userId = ref.read(currentUserIdProvider);
+      if (userId != null) {
+        await ref.read(cacheServiceProvider).cacheProfile(UserProfile(
+              id: userId,
+              displayName: displayName,
+              nativeLanguage: _nativeLanguage,
+              learningLanguage: _learningLanguage,
+            ));
+      }
+      ref.invalidate(profileProvider);
+      if (!mounted) return;
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/');
+      }
+    } catch (e, st) {
+      AppLogger.error('Saving profile failed', error: e, stackTrace: st);
+      if (mounted) {
+        setState(() => _error = friendlyErrorMessage(context.l10n, e));
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -60,76 +91,76 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final existing = ref.watch(profileProvider).valueOrNull;
+    _prefill(existing);
+    final editing = existing != null;
+
+    final form = Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextFormField(
+            controller: _nameCtrl,
+            decoration: InputDecoration(
+              labelText: l10n.displayName,
+              prefixIcon: const Icon(Icons.person_outline_rounded),
+            ),
+            textInputAction: TextInputAction.next,
+            validator: (v) =>
+                v == null || v.trim().isEmpty ? l10n.displayNameRequired : null,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          NativeLanguageDropdown(
+            value: _nativeLanguage,
+            label: l10n.nativeLanguage,
+            onChanged: (v) {
+              if (v != null) setState(() => _nativeLanguage = v);
+            },
+          ),
+          const SizedBox(height: AppSpacing.md),
+          LearningLanguageDropdown(
+            value: _learningLanguage,
+            label: l10n.learningLanguage,
+            onChanged: (v) {
+              if (v != null) setState(() => _learningLanguage = v);
+            },
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            AppNotice(
+              tone: AppTone.error,
+              icon: Icons.error_outline_rounded,
+              message: _error!,
+              dense: true,
+            ),
+          ],
+          const SizedBox(height: AppSpacing.xl),
+          LoadingButton(
+            onPressed: _save,
+            label: editing ? l10n.save : l10n.startLearning,
+            isLoading: _loading,
+          ),
+        ],
+      ),
+    );
+
+    if (!editing) {
+      return AuthScaffold(
+        title: l10n.setUpProfile,
+        subtitle: l10n.profileSubtitle,
+        child: form,
+      );
+    }
+
     return Scaffold(
+      appBar: AppBar(title: Text(l10n.editProfile)),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: AppSpacing.xxl),
-              const Text('Set up your profile',
-                  style: AppTypography.headingLarge),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'This helps UnEbb personalise your experience.',
-                style: AppTypography.bodyMedium.copyWith(
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              TextField(
-                controller: _nameCtrl,
-                decoration: const InputDecoration(hintText: 'Display name'),
-                textInputAction: TextInputAction.next,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              const Text('Native language', style: AppTypography.labelLarge),
-              const SizedBox(height: AppSpacing.sm),
-              DropdownButtonFormField<String>(
-                value: _nativeLanguage,
-                items: _languages
-                    .map((l) => DropdownMenuItem(value: l, child: Text(l)))
-                    .toList(),
-                onChanged: (v) => setState(() => _nativeLanguage = v!),
-                decoration: const InputDecoration(),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              const Text('Learning language', style: AppTypography.labelLarge),
-              const SizedBox(height: AppSpacing.sm),
-              DropdownButtonFormField<String>(
-                value: _learningLanguage,
-                items: _languages
-                    .map((l) => DropdownMenuItem(value: l, child: Text(l)))
-                    .toList(),
-                onChanged: (v) => setState(() => _learningLanguage = v!),
-                decoration: const InputDecoration(),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  _error!,
-                  style: AppTypography.bodySmall.copyWith(
-                    color: AppColors.error,
-                  ),
-                ),
-              ],
-              const SizedBox(height: AppSpacing.lg),
-              ElevatedButton(
-                onPressed: _loading ? null : _save,
-                child: _loading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text('Start learning'),
-              ),
-            ],
-          ),
+          padding:
+              const EdgeInsets.fromLTRB(20, AppSpacing.sm, 20, AppSpacing.lg),
+          child: form,
         ),
       ),
     );

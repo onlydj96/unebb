@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:unebb/features/auth/providers/auth_provider.dart';
+import 'package:unebb/features/auth/providers/profile_provider.dart';
 import 'package:unebb/features/auth/screens/login_screen.dart';
 import 'package:unebb/features/auth/screens/profile_setup_screen.dart';
 import 'package:unebb/features/auth/screens/signup_screen.dart';
@@ -16,23 +17,60 @@ import 'package:unebb/features/review/screens/review_screen.dart';
 import 'package:unebb/features/settings/screens/settings_screen.dart';
 import 'package:unebb/features/vocabulary/screens/add_word_screen.dart';
 import 'package:unebb/features/vocabulary/screens/edit_word_screen.dart';
+import 'package:unebb/features/vocabulary/screens/vocabulary_list_screen.dart';
+import 'package:unebb/features/vocabulary/screens/word_added_screen.dart';
 import 'package:unebb/features/vocabulary/screens/word_detail_screen.dart';
 
-/// Listens to Riverpod auth state and notifies GoRouter to re-evaluate
-/// the redirect guard whenever auth changes.
+/// Listens to Riverpod auth/profile state and notifies GoRouter to
+/// re-evaluate the redirect guard whenever either changes.
 class _RouterNotifier extends ChangeNotifier {
   _RouterNotifier(Ref ref) {
     ref.listen<AsyncValue<AuthState>>(
       authStateChangesProvider,
       (_, __) => notifyListeners(),
     );
+    ref.listen<AsyncValue<UserProfile?>>(
+      profileProvider,
+      (_, __) => notifyListeners(),
+    );
   }
+}
+
+/// Decides where a navigation to [location] should go instead (or null).
+///
+/// * Signed-out users only reach the public auth routes.
+/// * Signed-in users without a profile row (signed up with email
+///   confirmation, or signed in on a fresh account) are sent to profile setup
+///   once the profile has loaded — previously they silently got defaults.
+@visibleForTesting
+String? resolveRedirect({
+  required String location,
+  required bool isLoggedIn,
+  required AsyncValue<UserProfile?> profile,
+}) {
+  // Profile setup needs a session (saving without one can only fail).
+  const publicRoutes = {'/login', '/signup'};
+  final isPublic = publicRoutes.contains(location);
+
+  if (!isLoggedIn) return isPublic ? null : '/login';
+  if (isPublic) return '/';
+
+  // Only a completed, successful fetch that found no row means "missing".
+  // Errors and reloads still carry the stale `null` from the signed-out state
+  // (Riverpod even reports a refresh as AsyncData with isLoading); treating
+  // them as missing sent existing users to the first-run form (and Save
+  // overwrote their profile with defaults).
+  final missingProfile = profile is AsyncData<UserProfile?> &&
+      !profile.isLoading &&
+      profile.value == null;
+  if (missingProfile && location != '/profile-setup') return '/profile-setup';
+  return null;
 }
 
 /// The application router, exposed as a Riverpod [Provider].
 ///
 /// GoRouter evaluates [redirect] on every navigation event and whenever
-/// [_RouterNotifier] calls [notifyListeners] (i.e. on auth state changes).
+/// [_RouterNotifier] calls [notifyListeners] (auth or profile changes).
 final routerProvider = Provider<GoRouter>((ref) {
   final notifier = _RouterNotifier(ref);
 
@@ -44,14 +82,13 @@ final routerProvider = Provider<GoRouter>((ref) {
     final isLoggedIn =
         authAsync.valueOrNull?.session != null || currentSession != null;
 
-    final loc = state.matchedLocation;
-    // Routes that do not require authentication.
-    final isPublic =
-        loc == '/login' || loc == '/signup' || loc == '/profile-setup';
-
-    if (!isLoggedIn && !isPublic) return '/login';
-    if (isLoggedIn && loc == '/login') return '/';
-    return null;
+    return resolveRedirect(
+      location: state.matchedLocation,
+      isLoggedIn: isLoggedIn,
+      profile: isLoggedIn
+          ? ref.read(profileProvider)
+          : const AsyncValue<UserProfile?>.data(null),
+    );
   }
 
   final router = GoRouter(
@@ -109,7 +146,8 @@ final routerProvider = Provider<GoRouter>((ref) {
         ],
       ),
 
-      // Detail routes (outside of shell)
+      // Detail routes (outside of shell). Path parameters are guaranteed by
+      // the route pattern, so they are read with `!`.
       GoRoute(
         path: '/decks/create',
         builder: (context, state) => const CreateDeckScreen(),
@@ -125,6 +163,10 @@ final routerProvider = Provider<GoRouter>((ref) {
             AddWordScreen(deckId: state.pathParameters['deckId']),
       ),
       GoRoute(
+        path: '/words',
+        builder: (context, state) => const VocabularyListScreen(),
+      ),
+      GoRoute(
         path: '/words/:id',
         builder: (context, state) =>
             WordDetailScreen(wordId: state.pathParameters['id']!),
@@ -137,6 +179,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/add-word',
         builder: (context, state) => const AddWordScreen(),
+      ),
+      GoRoute(
+        path: '/word-added/:id',
+        builder: (context, state) =>
+            WordAddedScreen(vocabularyId: state.pathParameters['id']!),
       ),
       GoRoute(
         path: '/review',

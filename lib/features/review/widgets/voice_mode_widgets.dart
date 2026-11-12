@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
+import 'package:unebb/l10n/app_localizations.dart';
 
 import 'package:unebb/core/theme/app_colors.dart';
 import 'package:unebb/core/theme/app_radius.dart';
 import 'package:unebb/core/theme/app_spacing.dart';
+import 'package:unebb/core/theme/app_tone.dart';
 import 'package:unebb/core/theme/app_typography.dart';
 import 'package:unebb/features/review/providers/voice_mode_provider.dart';
 
@@ -18,9 +19,16 @@ class VoiceModeToggle extends ConsumerWidget {
     final l10n = AppLocalizations.of(context)!;
 
     return IconButton(
+      isSelected: voiceState.isEnabled,
+      style: IconButton.styleFrom(
+        backgroundColor:
+            voiceState.isEnabled ? AppColors.mintSoft : Colors.transparent,
+      ),
       icon: Icon(
-        voiceState.isEnabled ? Icons.mic : Icons.mic_off,
-        color: voiceState.isEnabled ? AppColors.primary : AppColors.textMuted,
+        voiceState.isEnabled ? Icons.mic_rounded : Icons.mic_off_rounded,
+        color: voiceState.isEnabled
+            ? AppColors.successText
+            : AppColors.textSecondary,
       ),
       tooltip: l10n.voiceMode,
       onPressed: () async {
@@ -67,77 +75,84 @@ class VoiceModeIndicator extends ConsumerWidget {
     if (!voiceState.isEnabled) return const SizedBox.shrink();
 
     String statusText;
-    Color statusColor;
+    AppTone tone;
     IconData statusIcon;
 
     switch (voiceState.phase) {
       case VoiceModePhase.speakingWord:
         statusText = l10n.speakingWord;
-        statusColor = AppColors.primary;
-        statusIcon = Icons.volume_up;
+        tone = AppTone.neutral;
+        statusIcon = Icons.volume_up_rounded;
         break;
       case VoiceModePhase.askingKnowledge:
         statusText = l10n.doYouKnowThisWord;
-        statusColor = AppColors.primary;
-        statusIcon = Icons.volume_up;
+        tone = AppTone.neutral;
+        statusIcon = Icons.volume_up_rounded;
         break;
       case VoiceModePhase.speakingFeedback:
       case VoiceModePhase.speakingExample:
       case VoiceModePhase.speakingResult:
         statusText = l10n.speakingWord;
-        statusColor = AppColors.primary;
-        statusIcon = Icons.volume_up;
+        tone = AppTone.neutral;
+        statusIcon = Icons.volume_up_rounded;
         break;
       case VoiceModePhase.listeningKnowledge:
         statusText = l10n.listeningForYesNo;
-        statusColor = AppColors.success;
-        statusIcon = Icons.mic;
+        tone = AppTone.success;
+        statusIcon = Icons.mic_rounded;
         break;
       case VoiceModePhase.listeningMeaning:
         statusText = l10n.listeningForMeaning;
-        statusColor = AppColors.success;
-        statusIcon = Icons.mic;
+        tone = AppTone.success;
+        statusIcon = Icons.mic_rounded;
         break;
       case VoiceModePhase.listeningTranslation:
         statusText = l10n.listeningForTranslation;
-        statusColor = AppColors.success;
-        statusIcon = Icons.mic;
+        tone = AppTone.success;
+        statusIcon = Icons.mic_rounded;
         break;
       case VoiceModePhase.waitingMeaning:
       case VoiceModePhase.waitingTranslation:
         statusText = l10n.tapMicToSpeak;
-        statusColor = AppColors.secondary;
-        statusIcon = Icons.mic_none;
+        tone = AppTone.neutral;
+        statusIcon = Icons.mic_none_rounded;
         break;
       case VoiceModePhase.processingMeaning:
       case VoiceModePhase.processingTranslation:
         statusText = l10n.processing;
-        statusColor = AppColors.warning;
-        statusIcon = Icons.hourglass_empty;
+        tone = AppTone.warning;
+        statusIcon = Icons.hourglass_empty_rounded;
         break;
       case VoiceModePhase.idle:
         return const SizedBox.shrink();
     }
+    final statusColor =
+        tone == AppTone.neutral ? AppColors.textPrimary : tone.foreground;
 
     return Container(
       padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
+        horizontal: 14,
         vertical: AppSpacing.sm,
       ),
       decoration: BoxDecoration(
-        color: statusColor.withAlpha(25),
-        borderRadius: AppRadius.mediumBorder,
-        border: Border.all(color: statusColor.withAlpha(80)),
+        color: tone == AppTone.neutral ? AppColors.surface : tone.soft,
+        borderRadius: AppRadius.fullBorder,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _AnimatedIcon(icon: statusIcon, color: statusColor, isAnimating: voiceState.isSpeaking || voiceState.isListening),
+          _AnimatedIcon(
+              icon: statusIcon,
+              color: statusColor,
+              isAnimating: voiceState.isSpeaking || voiceState.isListening),
           const SizedBox(width: AppSpacing.sm),
           Flexible(
             child: Text(
               statusText,
-              style: AppTypography.bodySmall.copyWith(color: statusColor),
+              style: AppTypography.labelMedium.copyWith(
+                color: statusColor,
+                fontWeight: FontWeight.w600,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -235,35 +250,33 @@ class VoiceMicButton extends ConsumerWidget {
     final voiceState = ref.watch(voiceModeProvider);
     final isListening = voiceState.isListening;
 
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: isListening
-              ? AppColors.success.withAlpha(25)
-              : AppColors.primary.withAlpha(25),
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: isListening ? AppColors.success : AppColors.primary,
-            width: 3,
+    return Semantics(
+      button: true,
+      label: AppLocalizations.of(context)!.voiceMode,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: isListening ? AppColors.mint : AppColors.cocoa,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: isListening
+                    ? AppColors.mint.withValues(alpha: 0.35)
+                    : AppColors.cocoa.withValues(alpha: 0.0),
+                spreadRadius: isListening ? size * 0.14 : 0,
+              ),
+            ],
           ),
-          boxShadow: isListening
-              ? [
-                  BoxShadow(
-                    color: AppColors.success.withAlpha(60),
-                    blurRadius: 20,
-                    spreadRadius: 5,
-                  ),
-                ]
-              : null,
-        ),
-        child: Icon(
-          isListening ? Icons.mic : Icons.mic_none,
-          color: isListening ? AppColors.success : AppColors.primary,
-          size: size * 0.5,
+          child: Icon(
+            isListening ? Icons.mic_rounded : Icons.mic_none_rounded,
+            color: isListening ? AppColors.cocoa : AppColors.paper,
+            size: size * 0.42,
+          ),
         ),
       ),
     );
@@ -284,212 +297,27 @@ class VoiceTranscriptDisplay extends ConsumerWidget {
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.md),
-      margin: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       decoration: BoxDecoration(
-        color: AppColors.surfaceElevated,
-        borderRadius: AppRadius.mediumBorder,
-        border: Border.all(color: AppColors.textMuted.withAlpha(50)),
+        color: AppColors.surface,
+        borderRadius: AppRadius.largeBorder,
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.format_quote, size: 16, color: AppColors.textMuted),
+          const Icon(
+            Icons.format_quote_rounded,
+            size: 18,
+            color: AppColors.textSecondary,
+          ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
               voiceState.currentTranscript,
-              style: AppTypography.bodyMedium.copyWith(
-                fontStyle: FontStyle.italic,
-              ),
+              style: AppTypography.bodyLarge,
             ),
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Voice mode card for flash card front (voice mode version)
-class VoiceFlashCardFront extends ConsumerWidget {
-  const VoiceFlashCardFront({
-    super.key,
-    required this.word,
-    required this.language,
-    required this.onMicTap,
-  });
-
-  final String word;
-  final String language;
-  final VoidCallback onMicTap;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final voiceState = ref.watch(voiceModeProvider);
-    final l10n = AppLocalizations.of(context)!;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Card(
-          elevation: 4,
-          shape: RoundedRectangleBorder(
-            borderRadius: AppRadius.xLargeBorder,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.xl,
-              vertical: AppSpacing.xxl,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(word, style: AppTypography.displayMedium),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  language,
-                  style: AppTypography.bodySmall.copyWith(color: AppColors.textMuted),
-                ),
-                const SizedBox(height: AppSpacing.xl),
-                const VoiceModeIndicator(),
-                const SizedBox(height: AppSpacing.lg),
-                VoiceMicButton(onTap: onMicTap),
-                const SizedBox(height: AppSpacing.md),
-                Text(
-                  voiceState.isListening ? l10n.tapToStopListening : l10n.tapMicToSpeak,
-                  style: AppTypography.bodySmall.copyWith(color: AppColors.textMuted),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                const VoiceTranscriptDisplay(),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Voice mode translation input view
-class VoiceTranslationView extends ConsumerWidget {
-  const VoiceTranslationView({
-    super.key,
-    required this.sentence,
-    required this.wordHint,
-    required this.targetLanguage,
-    required this.onMicTap,
-  });
-
-  final String sentence;
-  final String? wordHint;
-  final String targetLanguage;
-  final VoidCallback onMicTap;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final voiceState = ref.watch(voiceModeProvider);
-    final l10n = AppLocalizations.of(context)!;
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            l10n.translateInto(targetLanguage),
-            style: AppTypography.bodyMedium.copyWith(color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceElevated,
-              borderRadius: AppRadius.largeBorder,
-              border: Border.all(color: AppColors.secondary.withAlpha(80)),
-            ),
-            child: Text(sentence, style: AppTypography.bodyLarge),
-          ),
-          if (wordHint != null && wordHint!.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                const Icon(Icons.lightbulb_outline, size: 14, color: AppColors.textMuted),
-                const SizedBox(width: 4),
-                Text(
-                  l10n.hintUseWord(wordHint!),
-                  style: AppTypography.bodySmall.copyWith(color: AppColors.textMuted),
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: AppSpacing.xl),
-          const Center(child: VoiceModeIndicator()),
-          const SizedBox(height: AppSpacing.lg),
-          Center(child: VoiceMicButton(onTap: onMicTap, size: 100)),
-          const SizedBox(height: AppSpacing.md),
-          Center(
-            child: Text(
-              voiceState.isListening ? l10n.tapToStopListening : l10n.tapMicToSpeak,
-              style: AppTypography.bodySmall.copyWith(color: AppColors.textMuted),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          const VoiceTranscriptDisplay(),
-        ],
-      ),
-    );
-  }
-}
-
-/// Waveform animation for listening state
-class ListeningWaveform extends StatefulWidget {
-  const ListeningWaveform({super.key, this.color = AppColors.success});
-
-  final Color color;
-
-  @override
-  State<ListeningWaveform> createState() => _ListeningWaveformState();
-}
-
-class _ListeningWaveformState extends State<ListeningWaveform>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 1200),
-      vsync: this,
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(5, (index) {
-            final delay = index * 0.2;
-            final value = (((_controller.value + delay) % 1.0) * 2 - 1).abs();
-            return Container(
-              margin: const EdgeInsets.symmetric(horizontal: 2),
-              width: 4,
-              height: 8 + (value * 16),
-              decoration: BoxDecoration(
-                color: widget.color,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            );
-          }),
-        );
-      },
     );
   }
 }

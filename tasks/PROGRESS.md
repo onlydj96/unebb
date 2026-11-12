@@ -158,3 +158,182 @@ flutter test                 → 33/33 tests passed
 | 9 — Voice Input | Deferred | STT service not decided |
 | 10 — Design Polish | **Complete** | Shared widgets, AnimatedSwitcher, design tokens |
 | 11 — Testing | **Complete** | 33/33 tests, error handling review |
+| 12 — Stabilization pass | **Complete** | 2026-11-09, see below |
+
+---
+
+## Phase 12 — Stabilization pass (2026-11-09)
+
+Bugs were reproduced with tests first (9 of 10 new review-flow tests failed
+on the old code), then fixed.
+
+### Data integrity / security
+- [x] Sign-out or account switch no longer shows the previous user's cached
+      words/decks/progress (`CacheService.bindToUser`, `currentUserIdProvider`;
+      user-scoped notifiers rebuild; stale background syncs are discarded via
+      `BuildGeneration`)
+- [x] Migration `20261109000001`: `review_results.question_type` accepted
+      neither `meaning` (leftover `question_type_valid` constraint) nor
+      `knowledge` ("I don't know")
+- [x] Edge Functions resolve the real user (`_shared/auth.ts`);
+      `generate-explanation` only reads/writes the caller's own row (it used
+      the service role on any `vocabulary_id`) and validates the AI output
+
+### Review flow
+- [x] Phase guards: double taps no longer skip words or trigger duplicate AI
+      evaluations; fading-out views ignore taps
+- [x] History inserts are best-effort; a DB rejection no longer kills the
+      session; failed AI steps can be retried or skipped instead of
+      restarting the whole session
+- [x] Words without AI content get it generated before evaluation
+      (previously `evaluate-answer` returned 400)
+- [x] Dashboard/deck memory data is updated after every review
+- [x] Resume: correct totals, graded word not asked again, progress actually
+      saved on close (`ref` was used in `dispose`, which always threw)
+- [x] Review order: weakest words were sent to the low-priority tier
+      (`1 - strength`); ordering moved to `ReviewQueueBuilder` (domain, tested)
+- [x] Voice mode: "don't know" looped forever; outgoing views wiped the new
+      view's callbacks; know/don't-know buttons threw a layout exception
+- [x] Result screen shows a meaningful breakdown (meaning, translation, word
+      usage, grammar, naturalness) and the score actually used for scheduling
+- [x] Translation exercise is prefetched while the learner types the meaning;
+      memory state + history are saved in parallel
+
+### Vocabulary / decks
+- [x] AI content status (generating/failed) is tracked per word with retry
+      buttons instead of endless spinners; concurrent requests are deduplicated
+- [x] Editing a word's spelling/language regenerates its explanation;
+      edit screen no longer crashes on languages outside the list
+- [x] Duplicate words/decks give friendly messages (DB unique violations were
+      shown raw); words added to a deck default to the deck's language
+- [x] Background sync replaces stale cached data; deck word counts and
+      "recent" ordering are derived locally (the deck list no longer downloads
+      the whole review history)
+- [x] Deleting a deck removes its (cascade-deleted) words locally
+
+### UX
+- [x] All screens localized (en/ko); no more Korean-only dialogs in the
+      English UI or English-only dashboard in the Korean UI
+- [x] Friendly error messages everywhere (`friendlyErrorMessage`)
+- [x] Login/sign-up validation; accounts without a profile are routed to
+      profile setup; "Edit profile" works; sign-out always confirms
+- [x] "All words" screen (`/words`) so words outside decks are reachable
+- [x] l10n now generated into `lib/l10n` (`synthetic-package: false`)
+
+### Verification (2026-11-09)
+
+```
+dart format lib test   → formatted
+flutter analyze        → No issues found
+flutter test           → 94/94 passed (was 40/42)
+tsc --strict (Edge Functions, Deno shim) → OK
+```
+
+### Follow-ups (need project access)
+- `supabase db push` for migration `20261109000001`
+- `supabase functions deploy generate-explanation evaluate-answer generate-question`
+- Confirm the `evaluate-answer` model id (`gpt-5.6-luna`) exists for the account
+
+## Phase 14 — App logo (2026-11-12)
+
+New logo from `assets/logo/logo.svg` + `assets/logo/icon.png`.
+
+- [x] Launcher icons (Android + iOS) regenerated from `icon.png`: corners
+      filled (source had black corners and edge specks), Android adaptive
+      foreground fitted to the 66/108 safe zone with no extra inset, themed
+      (monochrome) icon added; adaptive background `#FDFAFA` (icon's own
+      background)
+- [x] In-app `BrandMark` now draws the book symbol from the SVG paths;
+      `BrandWordmark` / new `BrandLockup` use the logotype (Nunito Black,
+      bundled, SIL OFL); `BrandPulse` animates the recall arc
+- [x] Sign-in leads with the stacked logo; sign-up / profile setup show the
+      mark above the title; dashboard app bar and hero, settings footer and
+      session-complete screen use the new mark
+- [x] Verified with rendered previews; `flutter analyze` clean,
+      `flutter test` 132/132
+
+### Follow-ups
+- Android/iOS native splash is still white (consider flutter_native_splash
+  with the mark on `#FDFAFA`)
+- Web / Windows / macOS icons are still the Flutter defaults
+
+## Phase 13 — Visual redesign: "brand intersection" (2026-11-09)
+
+Whole-app UI/UX redesign on the huemint palette
+`#FFFDFC · #4E3029 · #B23B40 · #73C09C` (see docs/DESIGN_SYSTEM.md).
+
+- [x] Tokens: paper/cocoa/crimson/mint + derived surfaces, text, tones
+      (`AppTone`), memory scale crimson → ochre → lichen → mint
+- [x] Typography: bundled Fraunces serif for words/numerals; component
+      themes derive text styles from the merged text theme
+- [x] Full component theme (pill buttons, filled inputs, nav bar, chips,
+      sheets, dialogs, snackbars, slider, radio, tooltips)
+- [x] New shared components: BrandMark/BrandPulse, AppEmptyState, AppNotice,
+      ScoreRing, SectionLabel, TagPill, word-content widgets
+- [x] Login/sign-up/profile setup on a shared `AuthScaffold` with the brand
+      mark; dashboard cocoa hero with due count, serif stats and a
+      "memory health" distribution bar; deck/word lists as sand cards with
+      language-coded avatars; extended FABs hidden while lists are empty
+- [x] Review: progress bar in the app bar, centred flash card, "know / don't
+      know" as mint / crimson tiles, pinned primary actions, animated score
+      ring with verdict, brand-mark loading state
+- [x] Review options moved from a dialog to a bottom sheet
+- [x] New strings (en/ko): greetingName, dueNowLabel, memoryHealth,
+      addFirstWord, addWordHelper, answerIncorrect, verdictPass, verdictFail
+
+### Verification (2026-11-09)
+
+```
+dart format lib test   → formatted
+flutter analyze        → No issues found
+flutter test           → 132/132 passed (after concurrent behavioural fixes)
+```
+
+Rendered previews of every main screen with the real theme and fonts were
+reviewed (fixed: button/app-bar text losing the font family, collapsed
+memory-health bar, missing IPA glyphs in the serif, invisible hero icon).
+
+### Follow-ups
+- ~~Regenerate launcher icons~~ — done in Phase 14
+- Android/iOS native splash still white
+
+## Phase 12b — Fixes from an independent review (2026-11-09)
+
+An independent read-only review of Phase 12 found 12 issues; each was
+verified against the code (and library sources) and fixed with a regression
+test.
+
+- [x] An offline token-refresh failure (gotrue emits it as a stream *error*
+      while keeping the session) was read as "signed out": the cache was
+      wiped and the user sent to first-run profile setup. `currentUserProvider`
+      now reads gotrue's `currentUser`.
+- [x] Router: a failed or reloading profile fetch (which still carries the
+      signed-out `null`) no longer counts as "missing profile";
+      `/profile-setup` requires a session.
+- [x] Review screen: outgoing views are no longer remounted on every
+      transition (voice views re-spoke words, fields re-grabbed focus) —
+      shared `PhaseSwitcher` layout; also used by the word-added screen.
+- [x] Voice yes/no: "I don't know", "모르겠어요", "不知道", "no sé" were read as
+      "yes" (substring match) → `parseKnowsWordAnswer` checks negations first.
+- [x] Voice: the previous step's transcript could be submitted as the next
+      answer (cleared when a new prompt is spoken).
+- [x] Renaming a word while its explanation was generating kept the old
+      word's content (forced regeneration now runs after the pending one;
+      the Edge Function skips the write if the word changed).
+- [x] A single failed profile fetch broke reviews and AI generation until
+      restart (`readNativeLanguage` falls back to the default and retries).
+- [x] Saving the edit screen could wipe AI content that arrived after it
+      opened; its delete button stayed disabled on first load; deleting left
+      a lone page outside the tab shell.
+- [x] Closing the review screen while AI content was generating threw
+      "used after dispose"; dismissing the resume dialog with Back deleted
+      the saved progress; a double tap on "Practice now" requested two
+      exercises.
+
+### Verification (2026-11-09, after Phase 12b and Phase 13)
+
+```
+flutter analyze        → No issues found
+flutter test           → 132/132 passed
+tsc --strict (Edge Functions, Deno shim) → OK
+```

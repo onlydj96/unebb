@@ -1,43 +1,39 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'package:unebb/data/repositories/base_supabase_repository.dart';
 import 'package:unebb/domain/models/review_result.dart';
 import 'package:unebb/domain/models/review_session.dart';
-import 'package:unebb/domain/models/vocabulary_item.dart';
 import 'package:unebb/domain/repositories/review_repository.dart';
 
-class SupabaseReviewRepository implements ReviewRepository {
-  const SupabaseReviewRepository(this._client);
+class SupabaseReviewRepository
+    with SupabaseRepositoryMixin
+    implements ReviewRepository {
+  SupabaseReviewRepository(this._client);
 
   final SupabaseClient _client;
 
-  String get _userId => _client.auth.currentUser!.id;
+  @override
+  SupabaseClient get client => _client;
+
+  @override
+  String get tableName => 'review_sessions';
 
   @override
   Future<ReviewSession> createSession({
     required List<String> vocabularyIds,
   }) async {
-    // 1. Load vocabulary items for this session
-    final vocabRows = await _client
-        .from('vocabulary_items')
-        .select()
-        .eq('user_id', _userId)
-        .inFilter('id', vocabularyIds);
-
-    final items = vocabRows.map((r) => VocabularyItem.fromJson(r)).toList();
-
-    // 2. Create the session row
+    // The caller already holds the vocabulary items; only the row is created.
     final sessionRow = await _client
         .from('review_sessions')
         .insert({
-          'user_id': _userId,
+          'user_id': userId,
           'total_items': vocabularyIds.length,
           'completed_items': 0,
         })
         .select()
         .single();
 
-    return ReviewSession.fromJson(sessionRow).copyWith(
-      vocabularyItems: items,
-    );
+    return ReviewSession.fromJson(sessionRow);
   }
 
   @override
@@ -46,7 +42,7 @@ class SupabaseReviewRepository implements ReviewRepository {
         .from('review_sessions')
         .select()
         .eq('id', id)
-        .eq('user_id', _userId)
+        .eq('user_id', userId)
         .limit(1);
     if (rows.isEmpty) return null;
 
@@ -57,7 +53,7 @@ class SupabaseReviewRepository implements ReviewRepository {
         .from('review_results')
         .select()
         .eq('session_id', id)
-        .eq('user_id', _userId);
+        .eq('user_id', userId);
 
     final results = resultRows.map((r) {
       final eval = r['ai_evaluation'] as Map<String, dynamic>? ?? {};
@@ -68,12 +64,16 @@ class SupabaseReviewRepository implements ReviewRepository {
   }
 
   @override
-  Future<ReviewSession> completeSession(String id) async {
+  Future<ReviewSession> completeSession(String id,
+      {int? completedItems}) async {
     final row = await _client
         .from('review_sessions')
-        .update({'completed_at': DateTime.now().toUtc().toIso8601String()})
+        .update({
+          'completed_at': DateTime.now().toUtc().toIso8601String(),
+          if (completedItems != null) 'completed_items': completedItems,
+        })
         .eq('id', id)
-        .eq('user_id', _userId)
+        .eq('user_id', userId)
         .select()
         .single();
     return ReviewSession.fromJson(row);
@@ -89,7 +89,7 @@ class SupabaseReviewRepository implements ReviewRepository {
     final row = await _client
         .from('review_results')
         .insert({
-          'user_id': _userId,
+          'user_id': userId,
           'session_id': sessionId,
           'vocabulary_id': result.vocabularyId,
           'answer_type': result.answerType,

@@ -146,8 +146,32 @@ Dependency direction: `features/` → `domain/` ← `data/`
 
 ```text
 supabase/
+├── functions/
+│   ├── _shared/          # Shared helpers (auth.ts: resolve the signed-in user)
+│   ├── evaluate-answer/
+│   ├── generate-explanation/
+│   └── generate-question/
 └── migrations/           # SQL migration files (timestamped)
 ```
+
+Every Edge Function resolves the signed-in user with `requireUser()` before
+spending OpenAI credit. Functions that write with the service role must scope
+every query to that user (`user_id=eq.<caller>`), because the service role
+bypasses Row Level Security.
+
+---
+
+## Client State & Caching
+
+- User-scoped providers watch `currentUserIdProvider`, so they rebuild when the
+  account changes. `CacheService.bindToUser` wipes cached data that belongs to
+  another account (or to nobody after sign-out) before anything reads it.
+- Lists (vocabulary, memory states, decks) are cache-first: cached data renders
+  immediately and a background sync replaces it when the server copy differs.
+- Derived data (deck word counts, "recently studied" order, due counts) is
+  computed from those lists by pure domain helpers (`DeckOverview`) instead of
+  extra queries.
+- Review ordering lives in the domain service `ReviewQueueBuilder`.
 
 All database schema changes must be expressed as migration files.
 

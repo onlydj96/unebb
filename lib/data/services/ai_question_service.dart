@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Result of a `generate-question` Edge Function call.
@@ -9,8 +11,8 @@ class QuestionContent {
   });
 
   final String questionType; // 'translation'
-  final String sentence;     // native-language sentence to translate
-  final String wordHint;     // target word hint
+  final String sentence; // native-language sentence to translate
+  final String wordHint; // target word hint
 
   factory QuestionContent.fromJson(Map<String, dynamic> json) {
     return QuestionContent(
@@ -28,6 +30,7 @@ class AiQuestionService {
   final SupabaseClient _client;
 
   static const _function = 'generate-question';
+  static const _timeout = Duration(seconds: 30);
 
   Future<QuestionContent> generateTranslationQuestion({
     required String word,
@@ -48,6 +51,12 @@ class AiQuestionService {
         'native_language': nativeLanguage,
         'question_type': 'translation',
       },
+    ).timeout(
+      _timeout,
+      onTimeout: () => throw TimeoutException(
+        'AI question generation timed out after ${_timeout.inSeconds}s',
+        _timeout,
+      ),
     );
 
     if (response.status != 200) {

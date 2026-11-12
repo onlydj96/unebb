@@ -14,6 +14,7 @@ import 'package:unebb/domain/repositories/memory_state_repository.dart';
 import 'package:unebb/domain/repositories/review_repository.dart';
 import 'package:unebb/domain/repositories/vocabulary_repository.dart';
 import 'package:unebb/domain/services/memory_service.dart';
+import 'package:unebb/domain/services/review_queue_builder.dart';
 
 final supabaseClientProvider = Provider<SupabaseClient>(
   (_) => Supabase.instance.client,
@@ -33,6 +34,10 @@ final reviewRepositoryProvider = Provider<ReviewRepository>((ref) {
 
 final memoryServiceProvider = Provider<MemoryService>(
   (_) => const MemoryService(),
+);
+
+final reviewQueueBuilderProvider = Provider<ReviewQueueBuilder>(
+  (_) => const ReviewQueueBuilder(),
 );
 
 final aiExplanationServiceProvider = Provider<AiExplanationService>((ref) {

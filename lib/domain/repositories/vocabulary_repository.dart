@@ -4,6 +4,15 @@ abstract interface class VocabularyRepository {
   Future<List<VocabularyItem>> getAll();
   Future<List<VocabularyItem>> getByDeckId(String deckId);
   Future<VocabularyItem?> getById(String id);
+
+  /// Check if a word already exists in the specified deck (or globally if deckId is null).
+  /// Returns the existing item if found, null otherwise.
+  Future<VocabularyItem?> findDuplicate({
+    required String word,
+    required String language,
+    String? deckId,
+  });
+
   Future<VocabularyItem> create({
     required String word,
     required String language,
