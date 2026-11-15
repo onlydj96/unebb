@@ -1213,6 +1213,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Keep practicing'**
   String get verdictFail;
+
+  /// No description provided for @moveOn.
+  ///
+  /// In en, this message translates to:
+  /// **'Move on'**
+  String get moveOn;
+
+  /// No description provided for @writeASentence.
+  ///
+  /// In en, this message translates to:
+  /// **'Write a sentence'**
+  String get writeASentence;
+
+  /// No description provided for @writingPractice.
+  ///
+  /// In en, this message translates to:
+  /// **'Writing practice'**
+  String get writingPractice;
+
+  /// No description provided for @practiceNotGraded.
+  ///
+  /// In en, this message translates to:
+  /// **'Practice only. It doesn\'t change this word\'s review result.'**
+  String get practiceNotGraded;
+
+  /// No description provided for @errorPracticeUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t prepare a practice sentence. Try again or move on.'**
+  String get errorPracticeUnavailable;
 }
 
 class _AppLocalizationsDelegate

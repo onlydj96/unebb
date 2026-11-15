@@ -629,4 +629,21 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get verdictFail => 'Keep practicing';
+
+  @override
+  String get moveOn => 'Move on';
+
+  @override
+  String get writeASentence => 'Write a sentence';
+
+  @override
+  String get writingPractice => 'Writing practice';
+
+  @override
+  String get practiceNotGraded =>
+      'Practice only. It doesn\'t change this word\'s review result.';
+
+  @override
+  String get errorPracticeUnavailable =>
+      'Couldn\'t prepare a practice sentence. Try again or move on.';
 }

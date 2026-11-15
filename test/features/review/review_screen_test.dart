@@ -190,6 +190,106 @@ void main() {
     expect(find.text('1 / 2'), findsOneWidget);
   });
 
+  group('after a wrong answer', () {
+    Future<void> dontKnow(WidgetTester tester, _Env env) async {
+      await tester.pumpWidget(await testApp(
+        const ReviewScreen(mode: 'all'),
+        overrides: env.overrides(),
+      ));
+      await _settle(tester);
+      await tester.tap(find.textContaining('word '));
+      await _settle(tester);
+      await tester.tap(find.text("I don't know it"));
+      await _settle(tester);
+    }
+
+    testWidgets('"Write a sentence" runs an ungraded writing practice',
+        (tester) async {
+      final env = _Env(['a']);
+      await dontKnow(tester, env);
+
+      expect(find.text('Move on'), findsOneWidget);
+      await tester.tap(find.text('Write a sentence'));
+      await _settle(tester);
+
+      expect(find.text('Writing practice'), findsOneWidget);
+      expect(find.text('sentence for word a'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'my sentence');
+      await tester.pump();
+      await tester.tap(find.text('Submit translation'));
+      await _settle(tester);
+
+      expect(find.text('Writing practice'), findsOneWidget);
+      expect(find.textContaining('Practice only'), findsOneWidget);
+      expect(find.text('Word usage'), findsOneWidget);
+      await tester.tap(find.text('Finish'));
+      await _settle(tester);
+
+      // Still counted as the miss it was graded as.
+      expect(find.text('0 out of 1 correct'), findsOneWidget);
+      expect(env.memRepo.updates, hasLength(1));
+    });
+
+    testWidgets('"Move on" goes straight to the next word', (tester) async {
+      final env = _Env(['a', 'b']);
+      await dontKnow(tester, env);
+
+      await tester.tap(find.text('Move on'));
+      await _settle(tester);
+
+      expect(find.text('2 / 2'), findsOneWidget);
+      expect(env.questionService.calls, 0);
+    });
+
+    testWidgets('a half-typed practice sentence is dropped on "Move on"',
+        (tester) async {
+      final env = _Env(['a', 'b']);
+      await dontKnow(tester, env);
+      await tester.tap(find.text('Write a sentence'));
+      await _settle(tester);
+
+      await tester.enterText(find.byType(TextField), 'half a sen');
+      await tester.pump();
+      await tester.tap(find.text('Move on'));
+      await _settle(tester);
+
+      expect(find.text('2 / 2'), findsOneWidget);
+      await tester.tap(find.textContaining('word '));
+      await _settle(tester);
+      await tester.tap(find.text('I know it'));
+      await _settle(tester);
+      expect(find.text('half a sen'), findsNothing);
+    });
+
+    testWidgets('both choices fit side by side on a phone', (tester) async {
+      tester.view.physicalSize = const Size(320 * 3, 640 * 3);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+
+      final env = _Env(['a']);
+      env.evalService.meaningScore = 0.2;
+      await tester.pumpWidget(await testApp(
+        const ReviewScreen(mode: 'all'),
+        overrides: env.overrides(),
+      ));
+      await _settle(tester);
+      await tester.tap(find.textContaining('word '));
+      await _settle(tester);
+      await tester.tap(find.text('I know it'));
+      await _settle(tester);
+      await tester.enterText(find.byType(TextField), 'wrong');
+      await tester.pump();
+      await tester.tap(find.text('Submit answer'));
+      await _settle(tester);
+
+      expect(find.text('Not quite'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      final moveOn = tester.getRect(find.text('Move on'));
+      final write = tester.getRect(find.text('Write a sentence'));
+      expect(moveOn.center.dy, closeTo(write.center.dy, 1));
+    });
+  });
+
   testWidgets('voice mode: answering "don\'t know" shows the explanation',
       (tester) async {
     final env = _Env(['a']);
@@ -215,7 +315,9 @@ void main() {
     await tester.tap(find.text("I don't know it"));
     await _settle(tester);
 
-    expect(find.text('Got it'), findsOneWidget);
+    // The explanation offers the same choice as in text mode.
+    expect(find.text('Move on'), findsOneWidget);
+    expect(find.text('Write a sentence'), findsOneWidget);
     expect(env.reviewRepo.results.single.answerType, 'skip');
   });
 }

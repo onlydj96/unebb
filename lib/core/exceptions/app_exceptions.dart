@@ -39,6 +39,15 @@ class AiContentUnavailableException extends AppException {
   final String word;
 }
 
+/// Thrown when the optional writing-practice sentence for a word could not
+/// be generated.
+class PracticeUnavailableException extends AppException {
+  const PracticeUnavailableException({required this.word})
+      : super('No practice sentence available for "$word"');
+
+  final String word;
+}
+
 /// Postgres SQLSTATE helpers for errors surfaced by PostgREST.
 abstract final class PgErrorCodes {
   static const uniqueViolation = '23505';

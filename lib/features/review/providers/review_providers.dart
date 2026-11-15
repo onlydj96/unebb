@@ -36,6 +36,7 @@ enum ReviewPhase {
   translationInput, // User translates sentence → target language
   evaluatingTranslation, // Calling AI for translation eval
   showResult, // Final result: combined score + pattern badges
+  showPracticeResult, // Feedback on the optional (ungraded) writing practice
 }
 
 /// Weight of the meaning step in the combined score (translation = rest).
@@ -75,6 +76,7 @@ class ReviewUiState {
     this.allWordPatterns = const {},
     this.error,
     this.canRetryStep = false,
+    this.isPractice = false,
   });
 
   final ReviewPhase phase;
@@ -127,11 +129,23 @@ class ReviewUiState {
   /// skipped without losing the session.
   final bool canRetryStep;
 
+  /// True while the translation step is the optional writing practice offered
+  /// after a wrong answer. The word was already graded as a miss, so the
+  /// practice is evaluated for feedback only (no SM-2 update, no history row).
+  final bool isPractice;
+
   VocabularyItem? get currentItem =>
       session?.vocabularyItems.elementAtOrNull(currentIndex);
 
   MemoryState? get currentMemoryState =>
       currentItem != null ? memoryStates[currentItem!.id] : null;
+
+  /// Whether writing practice can be offered for the current word: only once
+  /// it is graded, and only with AI content to build the exercise from.
+  bool get canPractice {
+    final item = currentItem;
+    return item != null && currentGraded && hasAiContent(item);
+  }
 
   /// Words in this (possibly resumed) session.
   int get totalItems => session?.vocabularyItems.length ?? 0;
@@ -174,6 +188,7 @@ class ReviewUiState {
     List<String>? wordPatterns,
     Object? error,
     bool? canRetryStep,
+    bool? isPractice,
     bool clearError = false,
     bool clearStepData = false,
   }) {
@@ -212,6 +227,7 @@ class ReviewUiState {
       canRetryStep: clearError || clearStepData
           ? false
           : canRetryStep ?? this.canRetryStep,
+      isPractice: clearStepData ? false : isPractice ?? this.isPractice,
     );
   }
 }
@@ -592,6 +608,45 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
   /// Called from the "meaning failed" view.
   Future<void> nextAfterFailed() => nextWord();
 
+  /// Optional writing practice after a wrong answer, offered next to "move
+  /// on" in the explanation and "meaning failed" views. Uses the same
+  /// translation exercise as the correct path, but the result only gives
+  /// feedback: the word was already graded as a miss.
+  Future<void> startPractice() async {
+    const allowed = {ReviewPhase.showExplanation, ReviewPhase.meaningFailed};
+    final fromPhase = state.phase;
+    if (!allowed.contains(fromPhase) || !state.canPractice) return;
+    final item = state.currentItem!;
+    final index = state.currentIndex;
+
+    _emit(state.copyWith(
+      phase: ReviewPhase.generatingTranslation,
+      isPractice: true,
+    ));
+
+    try {
+      final ready = await _ensureContent(item);
+      // Usually ready at once: after a failed meaning answer the exercise
+      // was prefetched while the learner typed.
+      final question = ready == null ? null : await _translationQuestion(ready);
+      if (!_isCurrent(index) ||
+          state.phase != ReviewPhase.generatingTranslation) {
+        return;
+      }
+      if (question == null) throw PracticeUnavailableException(word: item.word);
+
+      _emit(state.copyWith(
+        phase: ReviewPhase.translationInput,
+        translationSentence: question.sentence,
+        wordHint: question.wordHint,
+      ));
+    } catch (e, st) {
+      if (!_isCurrent(index)) return;
+      // Retry returns to the choice view; "skip" moves to the next word.
+      _fail(e, st, retryPhase: fromPhase, retry: startPractice);
+    }
+  }
+
   /// Step 1: submit the meaning. Also accepted from [ReviewPhase.showWord] /
   /// [ReviewPhase.askKnowledge] for voice answers.
   Future<void> submitMeaning(String userAnswer) async {
@@ -706,6 +761,17 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
               );
       if (!_isCurrent(index)) return;
 
+      if (state.isPractice) {
+        // Feedback only. Patterns are still learned from the sentence.
+        unawaited(_persistPatterns(item.id, evaluation.detectedPatterns));
+        _emit(state.copyWith(
+          phase: ReviewPhase.showPracticeResult,
+          translationAnswer: userAnswer,
+          translationEvaluation: evaluation,
+        ));
+        return;
+      }
+
       // Pattern bookkeeping must not delay the result.
       unawaited(_persistPatterns(item.id, [
         ...?state.meaningEvaluation?.detectedPatterns,
@@ -734,16 +800,8 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
   /// Only valid once the current word is finished (or from an error, which
   /// skips the word) — repeated taps during a transition are ignored.
   Future<void> nextWord() async {
-    const allowed = {
-      ReviewPhase.showResult,
-      ReviewPhase.meaningFailed,
-      ReviewPhase.showExplanation,
-      ReviewPhase.error,
-    };
     final session = state.session;
-    if (!allowed.contains(state.phase) ||
-        session == null ||
-        state.currentItem == null) {
+    if (!_canAdvance || session == null || state.currentItem == null) {
       return;
     }
 
@@ -790,6 +848,19 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
+
+  /// Whether the current word is finished (or failed and may be skipped).
+  bool get _canAdvance => switch (state.phase) {
+        ReviewPhase.showResult ||
+        ReviewPhase.showPracticeResult ||
+        ReviewPhase.meaningFailed ||
+        ReviewPhase.showExplanation ||
+        ReviewPhase.error =>
+          true,
+        // Practice is optional: the word was graded before it started.
+        ReviewPhase.translationInput => state.isPractice,
+        _ => false,
+      };
 
   void _fail(
     Object error,

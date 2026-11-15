@@ -30,6 +30,8 @@ String friendlyErrorMessage(AppLocalizations l10n, Object error) {
       return l10n.duplicateWordError(word);
     case AiContentUnavailableException():
       return l10n.aiContentMissing;
+    case PracticeUnavailableException():
+      return l10n.errorPracticeUnavailable;
     case AuthException():
       return _authMessage(l10n, error);
     case TimeoutException():

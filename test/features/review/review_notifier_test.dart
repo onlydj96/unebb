@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:unebb/core/exceptions/app_exceptions.dart';
 import 'package:unebb/core/services/cache_service.dart';
 import 'package:unebb/data/repositories/providers.dart';
 import 'package:unebb/features/auth/providers/auth_provider.dart';
@@ -374,6 +375,166 @@ void main() {
       await n.retrySession();
       expect(env.profileLoads, greaterThan(loadsBefore));
       expect(_state(c).nativeLanguage, 'Japanese');
+    });
+
+    group('writing practice after a wrong answer', () {
+      test('"don\'t know" → practice gives feedback without regrading',
+          () async {
+        final env = _Env(ids: ['a', 'b']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        await n.answerDontKnowWord();
+        expect(_state(c).canPractice, isTrue);
+
+        await n.startPractice();
+        expect(_state(c).phase, ReviewPhase.translationInput);
+        expect(_state(c).isPractice, isTrue);
+        expect(
+          _state(c).translationSentence,
+          'sentence for ${_state(c).currentItem!.word}',
+        );
+
+        await n.submitTranslation('my sentence');
+        final state = _state(c);
+        expect(state.phase, ReviewPhase.showPracticeResult);
+        expect(state.translationEvaluation!.overallScore, 0.9);
+        expect(state.translationAnswer, 'my sentence');
+
+        expect(
+          env.evalService.calls.map((call) => call.evalType),
+          ['translation'],
+        );
+        // Graded once as a miss: no second SM-2 update, no extra history row,
+        // and a good practice sentence does not count as a correct answer.
+        expect(env.memRepo.updates.single.incorrectCount, 1);
+        expect(env.reviewRepo.results.single.questionType, 'knowledge');
+        expect(state.correctCount, 0);
+
+        await n.nextWord();
+        expect(_state(c).phase, ReviewPhase.showWord);
+        expect(_state(c).currentIndex, 1);
+        expect(_state(c).isPractice, isFalse);
+      });
+
+      test('after a failed meaning the prefetched exercise is reused',
+          () async {
+        final env = _Env(ids: ['a']);
+        env.evalService.meaningScore = 0.2;
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        n.answerKnowWord(); // prefetches the exercise
+        await n.submitMeaning('wrong');
+        expect(_state(c).phase, ReviewPhase.meaningFailed);
+
+        await n.startPractice();
+        expect(_state(c).phase, ReviewPhase.translationInput);
+        expect(env.questionService.calls, 1);
+
+        await n.submitTranslation('sentence');
+        expect(_state(c).phase, ReviewPhase.showPracticeResult);
+        expect(env.memRepo.updates, hasLength(1));
+        expect(env.reviewRepo.results.single.questionType, 'meaning');
+      });
+
+      test('patterns found in the practice sentence are remembered', () async {
+        final env = _Env(ids: ['a']);
+        env.evalService.translationScore = 0.3;
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        await n.answerDontKnowWord();
+        await n.startPractice();
+        await n.submitTranslation('bad sentence');
+        await pumpEventQueue();
+
+        expect(_state(c).phase, ReviewPhase.showPracticeResult);
+        // One call records the word-specific and the global pattern.
+        expect(env.patternRepo.upserts, [
+          ['pattern'],
+        ]);
+      });
+
+      test('practice can be left unanswered, the graded exercise cannot',
+          () async {
+        final env = _Env(ids: ['a', 'b']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        await n.answerDontKnowWord();
+        await n.startPractice();
+        await n.nextWord();
+        expect(_state(c).currentIndex, 1);
+        expect(_state(c).phase, ReviewPhase.showWord);
+
+        // Word "b": the regular translation step must be answered.
+        n.tapWord();
+        n.answerKnowWord();
+        await n.submitMeaning('meaning');
+        expect(_state(c).phase, ReviewPhase.translationInput);
+        expect(_state(c).isPractice, isFalse);
+        await n.nextWord();
+        expect(_state(c).phase, ReviewPhase.translationInput);
+        expect(_state(c).currentIndex, 1);
+      });
+
+      test('a failed exercise can be retried or skipped', () async {
+        final env = _Env(ids: ['a']);
+        env.questionService.error = Exception('AI down');
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        await n.answerDontKnowWord();
+        await n.startPractice();
+
+        expect(_state(c).phase, ReviewPhase.error);
+        expect(_state(c).canRetryStep, isTrue);
+        expect(_state(c).error, isA<PracticeUnavailableException>());
+
+        env.questionService.error = null;
+        await n.retry();
+        expect(_state(c).phase, ReviewPhase.translationInput);
+        expect(_state(c).isPractice, isTrue);
+      });
+
+      test('not offered when the word has no AI content', () async {
+        final env = _Env(ids: ['a'], definitions: {'a': null});
+        env.explanationService.error = Exception('AI down');
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        await n.answerDontKnowWord();
+        expect(_state(c).phase, ReviewPhase.showExplanation);
+        expect(_state(c).canPractice, isFalse);
+
+        await n.startPractice();
+        expect(_state(c).phase, ReviewPhase.showExplanation);
+        expect(env.questionService.calls, 0);
+      });
+
+      test('not offered before the word is graded', () async {
+        final env = _Env(ids: ['a']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        expect(_state(c).canPractice, isFalse);
+        await n.startPractice();
+        expect(_state(c).phase, ReviewPhase.showWord);
+      });
     });
 
     test('closing the screen while AI content is generated is safe', () async {

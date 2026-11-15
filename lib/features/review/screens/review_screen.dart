@@ -154,6 +154,13 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen>
     action(answer);
   }
 
+  /// Leaves the optional writing practice; a half-typed sentence must not
+  /// show up in the next word's answer field.
+  void _skipPractice() {
+    _answerController.clear();
+    _notifier.nextWord();
+  }
+
   static const _outsideSession = {
     ReviewPhase.loading,
     ReviewPhase.empty,
@@ -241,6 +248,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen>
             ReviewPhase.showExplanation when item != null => _ExplanationView(
                 item: item,
                 onNext: notifier.nextAfterExplanation,
+                onPractice: state.canPractice ? notifier.startPractice : null,
               ),
             ReviewPhase.meaningInput when item != null => _MeaningInputView(
                 item: item,
@@ -257,6 +265,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen>
                 item: item,
                 evaluation: state.meaningEvaluation!,
                 onNext: notifier.nextAfterFailed,
+                onPractice: state.canPractice ? notifier.startPractice : null,
               ),
             ReviewPhase.generatingTranslation => _BusyView(
                 word: item?.word ?? '',
@@ -267,6 +276,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen>
                 item: item,
                 sentence: state.translationSentence ?? '',
                 wordHint: state.wordHint,
+                onSkip: state.isPractice ? notifier.nextWord : null,
               ),
             ReviewPhase.translationInput when item != null =>
               _TranslationInputView(
@@ -275,6 +285,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen>
                 wordHint: state.wordHint,
                 controller: _answerController,
                 onSubmit: () => _submit(notifier.submitTranslation),
+                onSkip: state.isPractice ? _skipPractice : null,
               ),
             ReviewPhase.evaluatingTranslation => _BusyView(
                 word: item?.word ?? '',
@@ -291,6 +302,14 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen>
                 detectedPatterns: state.allDetectedPatterns,
                 previousStrength: state.previousStrength,
                 updatedStrength: state.updatedStrength,
+                isLast: state.currentIndex + 1 >= state.totalItems,
+                onNext: notifier.nextWord,
+              ),
+            ReviewPhase.showPracticeResult
+                when item != null && state.translationEvaluation != null =>
+              _PracticeResultView(
+                item: item,
+                evaluation: state.translationEvaluation!,
                 isLast: state.currentIndex + 1 >= state.totalItems,
                 onNext: notifier.nextWord,
               ),
@@ -582,6 +601,43 @@ class _SubmitButton extends StatelessWidget {
   }
 }
 
+/// After a wrong answer: move on, or practise the word by translating a
+/// sentence. Without [onPractice] (no AI content) only "next" is offered.
+class _AfterMissActions extends StatelessWidget {
+  const _AfterMissActions({
+    required this.nextLabel,
+    required this.onNext,
+    required this.onPractice,
+  });
+
+  final String nextLabel;
+  final VoidCallback onNext;
+  final VoidCallback? onPractice;
+
+  @override
+  Widget build(BuildContext context) {
+    final practice = onPractice;
+    if (practice == null) {
+      return FilledButton(onPressed: onNext, child: Text(nextLabel));
+    }
+    final l10n = context.l10n;
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton(onPressed: onNext, child: Text(l10n.moveOn)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: FilledButton(
+            onPressed: practice,
+            child: Text(l10n.writeASentence),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Flash card front / knowledge question
 // ---------------------------------------------------------------------------
@@ -662,10 +718,15 @@ class _AskKnowledgeView extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _ExplanationView extends StatelessWidget {
-  const _ExplanationView({required this.item, required this.onNext});
+  const _ExplanationView({
+    required this.item,
+    required this.onNext,
+    this.onPractice,
+  });
 
   final VocabularyItem item;
   final VoidCallback onNext;
+  final VoidCallback? onPractice;
 
   @override
   Widget build(BuildContext context) {
@@ -732,7 +793,11 @@ class _ExplanationView extends StatelessWidget {
     ];
 
     return _ReviewPage(
-      actions: FilledButton(onPressed: onNext, child: Text(l10n.gotIt)),
+      actions: _AfterMissActions(
+        nextLabel: l10n.gotIt,
+        onNext: onNext,
+        onPractice: onPractice,
+      ),
       children: [
         Align(
           alignment: Alignment.centerLeft,
@@ -888,17 +953,23 @@ class _MeaningFailedView extends StatelessWidget {
     required this.item,
     required this.evaluation,
     required this.onNext,
+    this.onPractice,
   });
 
   final VocabularyItem item;
   final AiEvaluation evaluation;
   final VoidCallback onNext;
+  final VoidCallback? onPractice;
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     return _ReviewPage(
-      actions: FilledButton(onPressed: onNext, child: Text(l10n.nextWord)),
+      actions: _AfterMissActions(
+        nextLabel: l10n.nextWord,
+        onNext: onNext,
+        onPractice: onPractice,
+      ),
       children: [
         const SizedBox(height: AppSpacing.sm),
         const Center(
@@ -961,11 +1032,15 @@ class _TranslationPrompt extends StatelessWidget {
     required this.item,
     required this.sentence,
     required this.wordHint,
+    this.practice = false,
   });
 
   final VocabularyItem item;
   final String sentence;
   final String? wordHint;
+
+  /// Marks the exercise as the optional (ungraded) writing practice.
+  final bool practice;
 
   @override
   Widget build(BuildContext context) {
@@ -974,6 +1049,17 @@ class _TranslationPrompt extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (practice) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TagPill(
+              l10n.writingPractice,
+              icon: Icons.edit_note_rounded,
+              tone: AppTone.warning,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         SectionLabel(
           l10n.translateInto(item.language),
           icon: Icons.translate_rounded,
@@ -1018,6 +1104,7 @@ class _TranslationInputView extends StatelessWidget {
     required this.wordHint,
     required this.controller,
     required this.onSubmit,
+    this.onSkip,
   });
 
   final VocabularyItem item;
@@ -1026,15 +1113,20 @@ class _TranslationInputView extends StatelessWidget {
   final TextEditingController controller;
   final VoidCallback onSubmit;
 
+  /// Set only for the optional writing practice, which may be left unanswered.
+  final VoidCallback? onSkip;
+
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
+    final skip = onSkip;
     return _ReviewPage(
       children: [
         _TranslationPrompt(
           item: item,
           sentence: sentence,
           wordHint: wordHint,
+          practice: skip != null,
         ),
         const SizedBox(height: AppSpacing.lg),
         TextField(
@@ -1056,6 +1148,10 @@ class _TranslationInputView extends StatelessWidget {
           label: l10n.submitTranslation,
           onSubmit: onSubmit,
         ),
+        if (skip != null) ...[
+          const SizedBox(height: AppSpacing.xs),
+          TextButton(onPressed: skip, child: Text(l10n.moveOn)),
+        ],
       ],
     );
   }
@@ -1164,6 +1260,94 @@ class _ResultView extends StatelessWidget {
         if (detectedPatterns.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.lg),
           _PatternBadges(patterns: detectedPatterns),
+        ],
+      ],
+    );
+  }
+}
+
+/// Feedback on the optional writing practice. Unlike [_ResultView] there is
+/// no verdict or memory change: the word was graded before the practice.
+class _PracticeResultView extends StatelessWidget {
+  const _PracticeResultView({
+    required this.item,
+    required this.evaluation,
+    required this.isLast,
+    required this.onNext,
+  });
+
+  final VocabularyItem item;
+  final AiEvaluation evaluation;
+  final bool isLast;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final score = evaluation.overallScore;
+    final rows = <(String, double)>[
+      (l10n.translation, evaluation.meaningScore),
+      (l10n.wordUsage, evaluation.usageScore),
+      (l10n.grammar, evaluation.grammarScore),
+      (l10n.naturalness, evaluation.exampleScore),
+    ];
+
+    return _ReviewPage(
+      actions: FilledButton(
+        onPressed: onNext,
+        child: Text(isLast ? l10n.finish : l10n.nextWord),
+      ),
+      children: [
+        const SizedBox(height: AppSpacing.sm),
+        Center(
+          child: TagPill(
+            l10n.writingPractice,
+            icon: Icons.edit_note_rounded,
+            tone: AppTone.warning,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Center(
+          child: ScoreRing(
+            value: score,
+            color: score >= kPassScore ? AppColors.success : AppColors.error,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          item.word,
+          style: AppTypography.word,
+          textAlign: TextAlign.center,
+        ),
+        _ReadingLine(item),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          l10n.practiceNotGraded,
+          style: AppTypography.labelMedium,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        FeedbackCard(
+          feedback: evaluation.feedback,
+          weakPoint: evaluation.weakPoint,
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md + 2,
+              vertical: 14,
+            ),
+            child: Column(
+              children: [
+                for (final (label, value) in rows) _ScoreRow(label, value),
+              ],
+            ),
+          ),
+        ),
+        if (evaluation.detectedPatterns.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.lg),
+          _PatternBadges(patterns: evaluation.detectedPatterns),
         ],
       ],
     );
@@ -1501,11 +1685,15 @@ class _VoiceTranslationInputView extends ConsumerStatefulWidget {
     required this.item,
     required this.sentence,
     required this.wordHint,
+    this.onSkip,
   });
 
   final VocabularyItem item;
   final String sentence;
   final String? wordHint;
+
+  /// Set only for the optional writing practice, which may be left unanswered.
+  final VoidCallback? onSkip;
 
   @override
   ConsumerState<_VoiceTranslationInputView> createState() =>
@@ -1565,6 +1753,7 @@ class _VoiceTranslationInputViewState
   Widget build(BuildContext context) {
     final voiceState = ref.watch(voiceModeProvider);
     final l10n = context.l10n;
+    final skip = widget.onSkip;
 
     return _ReviewPage(
       children: [
@@ -1572,6 +1761,7 @@ class _VoiceTranslationInputViewState
           item: widget.item,
           sentence: widget.sentence,
           wordHint: widget.wordHint,
+          practice: skip != null,
         ),
         const SizedBox(height: AppSpacing.xl),
         const Center(child: VoiceModeIndicator()),
@@ -1597,6 +1787,16 @@ class _VoiceTranslationInputViewState
               _review.submitTranslation(transcript);
             },
             child: Text(l10n.submitTranslation),
+          ),
+        ],
+        if (skip != null) ...[
+          const SizedBox(height: AppSpacing.xs),
+          TextButton(
+            onPressed: () {
+              unawaited(_voice.stop());
+              skip();
+            },
+            child: Text(l10n.moveOn),
           ),
         ],
       ],

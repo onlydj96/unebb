@@ -318,5 +318,10 @@
   "addWordHelper": "AI writes the definition, examples and common mistakes for you.",
   "answerIncorrect": "Not quite",
   "verdictPass": "Nice recall",
-  "verdictFail": "Keep practicing"
+  "verdictFail": "Keep practicing",
+  "moveOn": "Move on",
+  "writeASentence": "Write a sentence",
+  "writingPractice": "Writing practice",
+  "practiceNotGraded": "Practice only. It doesn't change this word's review result.",
+  "errorPracticeUnavailable": "Couldn't prepare a practice sentence. Try again or move on."
 }

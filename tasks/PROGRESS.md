@@ -234,6 +234,43 @@ tsc --strict (Edge Functions, Deno shim) → OK
 - `supabase functions deploy generate-explanation evaluate-answer generate-question`
 - Confirm the `evaluate-answer` model id (`gpt-5.6-luna`) exists for the account
 
+## Phase 16 — Writing practice after a wrong answer (2026-11-15)
+
+After "I don't know" (explanation) and after a failed meaning answer, the
+single "next" button is replaced by a choice: **Move on** / **Write a
+sentence** (그냥 넘어가기 / 문장 만들기).
+
+- [x] "Write a sentence" reuses the translation exercise (`generatingTranslation`
+      → `translationInput` → `evaluatingTranslation`) with
+      `ReviewUiState.isPractice`, then shows the new `showPracticeResult` view
+- [x] Practice is feedback only: the word was already graded as a miss, so
+      there is no second SM-2 update, no extra `review_results` row and no
+      change to the session's correct count. Detected patterns are still
+      persisted (they feed later AI feedback)
+- [x] After a failed meaning answer the exercise prefetched while typing is
+      reused; after "I don't know" it is generated on demand (no prefetch, so
+      learners who move on cost no AI call)
+- [x] Practice can be left from the input view ("Move on", text and voice);
+      a half-typed sentence is cleared. Generation failure → error view with
+      Retry (back to the choice) / Skip word (`PracticeUnavailableException`)
+- [x] Not offered without AI content (`canPractice`): the old single button
+      is shown instead
+- [x] New strings (en/ko): moveOn, writeASentence, writingPractice,
+      practiceNotGraded, errorPracticeUnavailable
+
+### Verification (2026-11-15)
+
+The local Flutter SDK (3.27.2 / Dart 3.6.1) is older than the lock file
+requires (Dart ≥ 3.7 via freezed 3.1), so verification ran in a throwaway
+git worktree with `freezed` pinned to 3.0.x through `pubspec_overrides.yaml`
+(the repo's pubspec/lock were not changed):
+
+```
+dart format lib test   → 0 changed
+flutter analyze        → No issues found
+flutter test           → 150/150 passed (11 new: 7 notifier, 4 widget)
+```
+
 ## Phase 15 — Japanese: kanji readings everywhere, word-usage check (2026-11-12)
 
 Reported: kanji in explanations/feedback came without readings, and a

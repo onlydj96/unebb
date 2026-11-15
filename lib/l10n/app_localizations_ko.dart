@@ -603,4 +603,19 @@ class AppLocalizationsKo extends AppLocalizations {
 
   @override
   String get verdictFail => '조금 더 연습해요';
+
+  @override
+  String get moveOn => '그냥 넘어가기';
+
+  @override
+  String get writeASentence => '문장 만들기';
+
+  @override
+  String get writingPractice => '작문 연습';
+
+  @override
+  String get practiceNotGraded => '연습이라 이 단어의 복습 결과에는 반영되지 않아요.';
+
+  @override
+  String get errorPracticeUnavailable => '연습 문장을 만들지 못했어요. 다시 시도하거나 넘어가 주세요.';
 }
