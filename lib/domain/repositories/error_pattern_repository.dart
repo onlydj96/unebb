@@ -17,11 +17,11 @@ abstract interface class ErrorPatternRepository {
     int limit = 5,
   });
 
-  /// Upserts patterns: increments count if pattern_text already exists for
-  /// (user_id, vocabulary_id), otherwise inserts a new row.
-  /// [vocabularyId] null = global pattern.
-  Future<void> upsertPatterns({
-    String? vocabularyId,
+  /// Records [patternTexts] seen in an answer about [vocabularyId], both as
+  /// word-specific and as global patterns, in one atomic server call:
+  /// existing patterns get their count incremented, new ones are inserted.
+  Future<void> recordPatterns({
+    required String vocabularyId,
     required List<String> patternTexts,
   });
 }

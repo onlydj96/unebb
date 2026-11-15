@@ -75,63 +75,19 @@ class SupabaseErrorPatternRepository
     return result;
   }
 
+  /// One round trip: the `record_error_patterns` function upserts the
+  /// word-specific and the global row of every pattern atomically
+  /// (`INSERT … ON CONFLICT DO UPDATE SET count = count + 1`), so concurrent
+  /// answers cannot lose increments or create duplicate rows.
   @override
-  Future<void> upsertPatterns({
-    String? vocabularyId,
+  Future<void> recordPatterns({
+    required String vocabularyId,
     required List<String> patternTexts,
   }) async {
     if (patternTexts.isEmpty) return;
-
-    final now = DateTime.now().toUtc().toIso8601String();
-
-    // Batch fetch: get all existing patterns in one query
-    final baseQuery = _client
-        .from(tableName)
-        .select('id, pattern_text, count')
-        .eq('user_id', userId)
-        .inFilter('pattern_text', patternTexts);
-
-    final existingRows = vocabularyId != null
-        ? await baseQuery.eq('vocabulary_id', vocabularyId)
-        : await baseQuery.isFilter('vocabulary_id', null);
-
-    // Build lookup map: pattern_text -> {id, count}
-    final existingMap = <String, Map<String, dynamic>>{};
-    for (final row in existingRows) {
-      existingMap[row['pattern_text'] as String] = row;
-    }
-
-    // Separate into inserts and updates
-    final toInsert = <Map<String, dynamic>>[];
-    final toUpdate = <Map<String, dynamic>>[];
-
-    for (final text in patternTexts) {
-      final existing = existingMap[text];
-      if (existing == null) {
-        toInsert.add({
-          'user_id': userId,
-          if (vocabularyId != null) 'vocabulary_id': vocabularyId,
-          'pattern_text': text,
-          'count': 1,
-          'last_seen_at': now,
-        });
-      } else {
-        toUpdate.add({
-          'id': existing['id'],
-          'count': (existing['count'] as int) + 1,
-          'last_seen_at': now,
-        });
-      }
-    }
-
-    // Execute batch operations in parallel
-    await Future.wait([
-      if (toInsert.isNotEmpty) _client.from(tableName).insert(toInsert),
-      // Updates must be done individually (Supabase limitation), but in parallel
-      ...toUpdate.map((u) => _client
-          .from(tableName)
-          .update({'count': u['count'], 'last_seen_at': u['last_seen_at']}).eq(
-              'id', u['id'])),
-    ]);
+    await _client.rpc('record_error_patterns', params: {
+      'p_vocabulary_id': vocabularyId,
+      'p_patterns': patternTexts,
+    });
   }
 }

@@ -316,8 +316,8 @@ class FakeErrorPatternRepository implements ErrorPatternRepository {
       const {};
 
   @override
-  Future<void> upsertPatterns({
-    String? vocabularyId,
+  Future<void> recordPatterns({
+    required String vocabularyId,
     required List<String> patternTexts,
   }) async {
     upserts.add(patternTexts);

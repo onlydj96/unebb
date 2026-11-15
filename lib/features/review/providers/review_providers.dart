@@ -983,19 +983,19 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     }
   }
 
-  /// Persist detected patterns (word-specific + global). Errors are logged
-  /// and swallowed — pattern bookkeeping must not break the review flow.
+  /// Persist detected patterns (word-specific + global, one server call).
+  /// Errors are logged and swallowed — pattern bookkeeping must not break
+  /// the review flow.
   Future<void> _persistPatterns(
     String vocabularyId,
     List<String> patterns,
   ) async {
     if (patterns.isEmpty) return;
     try {
-      final repo = _ref.read(errorPatternRepositoryProvider);
-      await Future.wait([
-        repo.upsertPatterns(vocabularyId: vocabularyId, patternTexts: patterns),
-        repo.upsertPatterns(vocabularyId: null, patternTexts: patterns),
-      ]);
+      await _ref.read(errorPatternRepositoryProvider).recordPatterns(
+            vocabularyId: vocabularyId,
+            patternTexts: patterns,
+          );
     } catch (e, st) {
       AppLogger.warning(
         'Failed to persist error patterns',
