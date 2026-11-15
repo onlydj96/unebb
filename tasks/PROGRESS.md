@@ -258,18 +258,20 @@ sentence** (그냥 넘어가기 / 문장 만들기).
 - [x] New strings (en/ko): moveOn, writeASentence, writingPractice,
       practiceNotGraded, errorPracticeUnavailable
 
-### Verification (2026-11-15)
+### Verification (2026-11-16)
 
-The local Flutter SDK (3.27.2 / Dart 3.6.1) is older than the lock file
-requires (Dart ≥ 3.7 via freezed 3.1), so verification ran in a throwaway
-git worktree with `freezed` pinned to 3.0.x through `pubspec_overrides.yaml`
-(the repo's pubspec/lock were not changed):
+Pinned Flutter 3.29.3 (FVM), fresh worktree of each commit, CI steps:
 
 ```
-dart format lib test   → 0 changed
+dart format --set-exit-if-changed lib test → 0 changed (after gen-l10n)
 flutter analyze        → No issues found
-flutter test           → 150/150 passed (11 new: 7 notifier, 4 widget)
+flutter test           → 168/168 passed (11 new: 7 notifier, 4 widget)
 ```
+
+A fresh checkout's `flutter pub get` generates the l10n files before the
+package config exists, in the newer "tall" style, which then fails the
+format check. CI and `make dev` now run `flutter gen-l10n` once more after
+`pub get`, which restores the committed output.
 
 ## Phase 15 — Japanese: kanji readings everywhere, word-usage check (2026-11-12)
 

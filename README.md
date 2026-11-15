@@ -103,7 +103,7 @@ make functions-check # Type-check, lint and test the Edge Functions (Deno)
 make check       # Everything CI runs (format-check + analyze + test + functions-check)
 make l10n        # Generate localization files
 make outdated    # Check outdated dependencies
-make dev         # Setup dev environment (get + codegen)
+make dev         # Setup dev environment (get + l10n + codegen)
 make all         # clean + dev + check
 ```
 

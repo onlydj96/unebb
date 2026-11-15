@@ -34,6 +34,13 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # On a fresh checkout `pub get` generates the l10n files before the
+      # package config exists, so they come out in the newer "tall" format
+      # style. Generating again uses the project's language version and
+      # restores the committed files.
+      - name: Generate localizations
+        run: flutter gen-l10n
+
       # Before codegen, so only committed sources are checked.
       - name: Check formatting
         run: dart format --output=none --set-exit-if-changed lib test

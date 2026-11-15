@@ -55,7 +55,7 @@ upgrade: ## Upgrade dependencies (minor versions only)
 upgrade-major: ## Upgrade dependencies (including major versions)
 	flutter pub upgrade --major-versions
 
-dev: get codegen ## Setup development environment
+dev: get l10n codegen ## Setup development environment
 	@echo "✅ Development environment ready!"
 
 all: clean dev check ## Clean, install, generate, then run every check
