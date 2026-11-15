@@ -136,9 +136,12 @@ Repository implementations require tests where practical.
 
 Before completing a task run:
 
-flutter format .
+dart format lib test
 flutter analyze
 flutter test
+deno test --allow-env supabase/functions   (when Edge Functions changed)
+
+(`make check` runs all of these, the same as CI.)
 
 If verification fails:
 

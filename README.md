@@ -13,8 +13,11 @@ AI-powered adaptive vocabulary learning application built with Flutter and Supab
 
 ## Prerequisites
 
-- Flutter SDK 3.6.1 or higher
-- Dart SDK 3.7.0 or higher
+- Flutter 3.29.3 (Dart 3.7) — pinned in `.fvmrc`. With [FVM](https://fvm.app):
+  `fvm install`, then prefix commands with `fvm` (e.g. `fvm flutter pub get`).
+  Older SDKs fail at `flutter pub get` (the locked `freezed`/`build` versions
+  need Dart 3.7).
+- Deno 2 (only for checking the Supabase Edge Functions)
 - Supabase account (for backend services)
 
 ## Getting Started
@@ -44,7 +47,7 @@ AI-powered adaptive vocabulary learning application built with Flutter and Supab
    ```bash
    make codegen
    # or
-   flutter pub run build_runner build --delete-conflicting-outputs
+   dart run build_runner build --delete-conflicting-outputs
    ```
 
 3. **Run the app**
@@ -59,7 +62,6 @@ AI-powered adaptive vocabulary learning application built with Flutter and Supab
 This project uses code generation for:
 - `freezed` - Immutable data classes
 - `json_serializable` - JSON serialization
-- `riverpod_generator` - State management providers
 
 **Generate code once:**
 
@@ -92,14 +94,26 @@ make help        # Show all available commands
 make get         # Install dependencies
 make codegen     # Generate code
 make watch       # Watch mode for code generation
-make clean       # Clean and rebuild
+make clean       # Remove build artifacts (run `make dev` afterwards)
 make analyze     # Run static analysis
-make test        # Run tests
+make test        # Run Flutter tests
 make format      # Format code
+make format-check    # Fail if any Dart file is not formatted
+make functions-check # Type-check, lint and test the Edge Functions (Deno)
+make check       # Everything CI runs (format-check + analyze + test + functions-check)
 make l10n        # Generate localization files
 make outdated    # Check outdated dependencies
 make dev         # Setup dev environment (get + codegen)
-make all         # Full build pipeline (clean + get + codegen + analyze + test)
+make all         # clean + dev + check
+```
+
+### Continuous Integration
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`:
+
+- **Flutter** (version from `.fvmrc`): `dart format --set-exit-if-changed`,
+  `build_runner`, `flutter analyze`, `flutter test`
+- **Edge Functions**: `deno check`, `deno lint`, `deno test`
 ```
 
 ### Project Structure
@@ -140,6 +154,9 @@ flutter test --coverage
 
 # Run specific test file
 flutter test test/widget_test.dart
+
+# Edge Function tests (Deno)
+deno test --allow-env supabase/functions
 ```
 
 ## Localization

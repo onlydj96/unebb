@@ -35,3 +35,6 @@ build/
 # ============================================
 android/app/.cxx/
 supabase/.temp/
+
+# FVM (the pinned version itself is in .fvmrc)
+.fvm/

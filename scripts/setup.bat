@@ -15,7 +15,7 @@ if %ERRORLEVEL% NEQ 0 (
 echo.
 
 echo Step 2/3: Generating code...
-call flutter pub run build_runner build --delete-conflicting-outputs
+call dart run build_runner build --delete-conflicting-outputs
 if %ERRORLEVEL% NEQ 0 (
     echo ❌ Failed to generate code
     exit /b 1

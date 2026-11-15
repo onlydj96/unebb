@@ -19,7 +19,13 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
+  # The locked dependencies (freezed 3.1 → build 2.5) need Dart >= 3.7, i.e.
+  # Flutter >= 3.29; the project is pinned to Flutter 3.29.3 in .fvmrc and CI.
+  # The Dart lower bound stays at 3.6 on purpose: it sets the language
+  # version, and 3.7 switches `dart format` to the new "tall" style, which
+  # reformats most files. Raise it in a formatting-only commit.
   sdk: ^3.6.1
+  flutter: ">=3.29.0"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -41,7 +47,6 @@ dependencies:
 
   # State management
   flutter_riverpod: ^2.6.1
-  riverpod_annotation: ^2.6.1
 
   # Navigation
   go_router: ^14.8.1
@@ -70,11 +75,6 @@ dev_dependencies:
   build_runner: ^2.4.14
   freezed: ^3.1.0
   json_serializable: ^6.9.3
-  riverpod_generator: ^2.6.5
-
-  # Linting
-  custom_lint: ^0.7.6
-  riverpod_lint: ^2.6.5
 
   # App icon generator
   flutter_launcher_icons: ^0.14.3
