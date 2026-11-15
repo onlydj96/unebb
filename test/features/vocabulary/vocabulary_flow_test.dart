@@ -281,6 +281,84 @@ void main() {
     });
   });
 
+  group('delta sync', () {
+    final cursor = SyncCursor(
+      updatedUpTo: DateTime.utc(2026, 1, 15),
+      fullSyncAt: DateTime.now().toUtc(),
+    );
+
+    /// Prefs holding [cached] (and [cursor]) as a previous launch left them.
+    Future<Map<String, Object>> previousLaunch(
+      List<VocabularyItem> cached,
+      SyncCursor cursor,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      final seed = await SharedPreferences.getInstance();
+      await (CacheService(seed)..bindToUser('user-a'))
+          .cacheVocabularyList(cached, syncCursor: cursor);
+      return {
+        CacheKeys.owner: 'user-a',
+        CacheKeys.vocabularyList: seed.getString(CacheKeys.vocabularyList)!,
+        CacheKeys.vocabularySync: seed.getString(CacheKeys.vocabularySync)!,
+      };
+    }
+
+    test('downloads only what changed since the last sync', () async {
+      final edited = vocab('a', definition: 'edited elsewhere')
+          .copyWith(updatedAt: DateTime.utc(2026, 2, 1));
+      // 'c' was deleted on another device.
+      final env = _Env(words: [edited, vocab('b')]);
+      final c = await env.container(
+        prefsValues: await previousLaunch(
+          [vocab('a'), vocab('b'), vocab('c')],
+          cursor,
+        ),
+      );
+
+      expect(await c.read(vocabularyNotifierProvider.future), hasLength(3));
+      await pumpEventQueue();
+
+      final words = c.read(vocabularyNotifierProvider).requireValue;
+      expect(words.map((w) => w.id), ['a', 'b']);
+      expect(words.first.definition, 'edited elsewhere');
+      expect(env.vocabRepo.getAllCalls, 0);
+      expect(
+        c.read(cacheServiceProvider).getVocabularySyncCursor()!.updatedUpTo,
+        DateTime.utc(2026, 2, 1),
+      );
+    });
+
+    test('downloads everything once the daily full sync is due', () async {
+      final env = _Env(words: [vocab('a')]);
+      final c = await env.container(
+        prefsValues: await previousLaunch(
+          [vocab('a')],
+          SyncCursor(
+            updatedUpTo: cursor.updatedUpTo,
+            fullSyncAt:
+                DateTime.now().toUtc().subtract(const Duration(days: 2)),
+          ),
+        ),
+      );
+
+      await c.read(vocabularyNotifierProvider.future);
+      await pumpEventQueue();
+
+      expect(env.vocabRepo.getAllCalls, 1);
+    });
+
+    test('sync() reuses a sync that just finished', () async {
+      final env = _Env(words: [vocab('a')]);
+      final c = await env.container();
+      await c.read(vocabularyNotifierProvider.future);
+
+      await _vocab(c).sync();
+      await _vocab(c).sync();
+
+      expect(env.vocabRepo.getAllCalls, 1);
+    });
+  });
+
   group('decks', () {
     test('deleting a deck removes its words from the local list', () async {
       final env = _Env(words: [

@@ -54,6 +54,111 @@ void main() {
     });
   });
 
+  group('CacheService deferred writes', () {
+    const delay = Duration(milliseconds: 5);
+    Future<void> afterDelay() =>
+        Future<void>.delayed(delay + const Duration(milliseconds: 50));
+
+    test('a burst of edits is written once, with the latest list', () async {
+      final cache = CacheService(prefs, writeDelay: delay)
+        ..bindToUser(kTestUserId);
+
+      cache.scheduleVocabularyList([vocab('a')]);
+      cache.scheduleVocabularyList([vocab('a'), vocab('b')]);
+      expect(cache.getCachedVocabularyList(), isNull);
+
+      await afterDelay();
+      expect(cache.getCachedVocabularyList()!.map((v) => v.id), ['a', 'b']);
+    });
+
+    test('flush writes pending edits immediately', () async {
+      final cache = CacheService(prefs, writeDelay: const Duration(hours: 1));
+
+      cache.scheduleMemoryStates([memory('a')]);
+      await cache.flush();
+
+      expect(cache.getCachedMemoryStates(), hasLength(1));
+    });
+
+    test('a direct write replaces a pending one', () async {
+      final cache = CacheService(prefs, writeDelay: delay);
+
+      cache.scheduleVocabularyList([vocab('old')]);
+      await cache.cacheVocabularyList([vocab('new')]);
+      await afterDelay();
+
+      expect(cache.getCachedVocabularyList()!.single.id, 'new');
+    });
+
+    test('dispose drops pending writes (account switch)', () async {
+      final cache = CacheService(prefs, writeDelay: delay)
+        ..bindToUser('user-a');
+
+      cache.scheduleVocabularyList([vocab('a1', userId: 'user-a')]);
+      cache.dispose();
+      final next = CacheService(prefs)..bindToUser('user-b');
+      await afterDelay();
+
+      expect(next.getCachedVocabularyList(), isNull);
+    });
+  });
+
+  group('SyncCursor', () {
+    final cursor = SyncCursor(
+      updatedUpTo: DateTime.utc(2026, 1, 15),
+      fullSyncAt: DateTime.now().toUtc(),
+    );
+
+    test('is stored with a synced list and cleared by an unsynced write',
+        () async {
+      final cache = CacheService(prefs);
+
+      await cache.cacheVocabularyList([vocab('a')], syncCursor: cursor);
+      expect(cache.getVocabularySyncCursor()!.updatedUpTo, cursor.updatedUpTo);
+
+      await cache.cacheVocabularyList([vocab('a')]);
+      expect(cache.getVocabularySyncCursor(), isNull);
+    });
+
+    test('scheduled writes keep the cursor', () async {
+      final cache = CacheService(prefs, writeDelay: Duration.zero);
+
+      await cache.cacheMemoryStates([memory('a')], syncCursor: cursor);
+      cache.scheduleMemoryStates([memory('a'), memory('b')]);
+      await cache.flush();
+
+      expect(cache.getMemoryStatesSyncCursor(), isNotNull);
+    });
+
+    test('is dropped when another user signs in', () async {
+      final cache = CacheService(prefs)..bindToUser('user-a');
+      await cache.cacheMemoryStates([memory('a')], syncCursor: cursor);
+
+      final next = CacheService(prefs)..bindToUser('user-b');
+
+      expect(next.getMemoryStatesSyncCursor(), isNull);
+    });
+
+    test('expires a day after the last full download', () {
+      expect(cursor.isExpired, isFalse);
+      final old = SyncCursor(
+        updatedUpTo: cursor.updatedUpTo,
+        fullSyncAt: DateTime.now().toUtc().subtract(const Duration(hours: 25)),
+      );
+      expect(old.isExpired, isTrue);
+    });
+
+    test('only moves forward', () {
+      final later = DateTime.utc(2026, 2, 1);
+      expect(cursor.advancedTo(later).updatedUpTo, later);
+      expect(
+        cursor.advancedTo(DateTime.utc(2026, 1, 1)).updatedUpTo,
+        cursor.updatedUpTo,
+      );
+      expect(cursor.advancedTo(null), same(cursor));
+    });
+  });
+
   group('ReviewSessionProgress', () {
     test('round-trips through JSON including earlier progress', () {
       final progress = ReviewSessionProgress(

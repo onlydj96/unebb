@@ -135,6 +135,18 @@ class FakeVocabularyRepository implements VocabularyRepository {
   }
 
   @override
+  Future<List<VocabularyItem>> getUpdatedSince(DateTime since) async => [
+        for (final v in items)
+          if (!v.updatedAt.isBefore(since)) v,
+      ];
+
+  @override
+  Future<int> count() async => items.length;
+
+  @override
+  Future<Set<String>> getAllIds() async => {for (final v in items) v.id};
+
+  @override
   Future<List<VocabularyItem>> getByDeckId(String deckId) async =>
       items.where((v) => v.deckId == deckId).toList();
 
@@ -214,6 +226,19 @@ class FakeMemoryStateRepository implements MemoryStateRepository {
     getAllCalls++;
     return [...states];
   }
+
+  @override
+  Future<List<MemoryState>> getUpdatedSince(DateTime since) async => [
+        for (final s in states)
+          if (!s.updatedAt.isBefore(since)) s,
+      ];
+
+  @override
+  Future<int> count() async => states.length;
+
+  @override
+  Future<Set<String>> getAllVocabularyIds() async =>
+      {for (final s in states) s.vocabularyId};
 
   @override
   Future<MemoryState?> getByVocabularyId(String vocabularyId) async =>

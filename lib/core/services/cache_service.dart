@@ -16,7 +16,8 @@ abstract class CacheKeys {
   static const String vocabularyList = 'cached_vocabulary_list';
   static const String memoryStates = 'cached_memory_states';
   static const String deckList = 'cached_deck_list';
-  static const String lastSyncTime = 'last_sync_time';
+  static const String vocabularySync = 'vocabulary_sync_cursor';
+  static const String memoryStatesSync = 'memory_states_sync_cursor';
   static const String reviewSessionProgress = 'review_session_progress';
 
   /// ID of the user the cached data belongs to.
@@ -28,9 +29,66 @@ abstract class CacheKeys {
     vocabularyList,
     memoryStates,
     deckList,
-    lastSyncTime,
+    vocabularySync,
+    memoryStatesSync,
     reviewSessionProgress,
   ];
+}
+
+/// How far a cached list is known to match the server.
+///
+/// Delta sync downloads only rows whose server `updated_at` is at or after
+/// [updatedUpTo] (minus a small overlap). A full download is still forced
+/// once [fullSyncInterval] has passed since [fullSyncAt], as a safety net
+/// against any divergence a delta cannot see.
+class SyncCursor {
+  const SyncCursor({required this.updatedUpTo, required this.fullSyncAt});
+
+  /// Cursor for a list that was just downloaded in full, or null when the
+  /// list is empty (nothing to anchor a delta on).
+  static SyncCursor? afterFullSync(Iterable<DateTime> updatedAts) {
+    final newest = latest(updatedAts);
+    if (newest == null) return null;
+    return SyncCursor(updatedUpTo: newest, fullSyncAt: DateTime.now().toUtc());
+  }
+
+  static DateTime? latest(Iterable<DateTime> values) {
+    DateTime? newest;
+    for (final value in values) {
+      if (newest == null || value.isAfter(newest)) newest = value;
+    }
+    return newest;
+  }
+
+  static const Duration fullSyncInterval = Duration(hours: 24);
+
+  /// Newest server `updated_at` contained in the cached list.
+  final DateTime updatedUpTo;
+
+  /// When the cached list was last replaced by a full download.
+  final DateTime fullSyncAt;
+
+  /// True when a full download is due (also when the clock moved backwards).
+  bool get isExpired {
+    final age = DateTime.now().toUtc().difference(fullSyncAt);
+    return age.isNegative || age > fullSyncInterval;
+  }
+
+  /// This cursor moved forward to include rows changed up to [newest].
+  SyncCursor advancedTo(DateTime? newest) =>
+      newest == null || !newest.isAfter(updatedUpTo)
+          ? this
+          : SyncCursor(updatedUpTo: newest, fullSyncAt: fullSyncAt);
+
+  Map<String, dynamic> toJson() => {
+        'updated_up_to': updatedUpTo.toUtc().toIso8601String(),
+        'full_sync_at': fullSyncAt.toUtc().toIso8601String(),
+      };
+
+  factory SyncCursor.fromJson(Map<String, dynamic> json) => SyncCursor(
+        updatedUpTo: DateTime.parse(json['updated_up_to'] as String),
+        fullSyncAt: DateTime.parse(json['full_sync_at'] as String),
+      );
 }
 
 /// Cached review session progress for resuming interrupted sessions.
@@ -106,10 +164,67 @@ class ReviewSessionProgress {
 }
 
 /// Service for managing local cache with SharedPreferences.
+///
+/// Lists are stored as one JSON string each. Writes caused by single-item
+/// edits go through [scheduleVocabularyList] / [scheduleMemoryStates], which
+/// coalesce a burst of edits (e.g. grading words in a review) into one
+/// encode + write after [writeDelay]. A lost deferred write is harmless: the
+/// next delta sync downloads every row changed on the server since the
+/// cursor again.
 class CacheService {
-  CacheService(this._prefs);
+  CacheService(this._prefs, {this.writeDelay = const Duration(seconds: 1)});
 
   final SharedPreferences _prefs;
+  final Duration writeDelay;
+
+  final Map<String, String Function()> _pendingWrites = {};
+  final Map<String, Timer> _pendingTimers = {};
+
+  void _scheduleWrite(String key, String Function() encode) {
+    _pendingWrites[key] = encode;
+    _pendingTimers.remove(key)?.cancel();
+    _pendingTimers[key] = Timer(writeDelay, () => unawaited(_flushKey(key)));
+  }
+
+  void _cancelWrite(String key) {
+    _pendingTimers.remove(key)?.cancel();
+    _pendingWrites.remove(key);
+  }
+
+  Future<void> _flushKey(String key) async {
+    _pendingTimers.remove(key)?.cancel();
+    final encode = _pendingWrites.remove(key);
+    if (encode != null) await _prefs.setString(key, encode());
+  }
+
+  /// Writes every deferred update now.
+  Future<void> flush() => Future.wait([
+        for (final key in [..._pendingWrites.keys]) _flushKey(key)
+      ]);
+
+  /// Drops deferred writes. Called when the account changes: they hold the
+  /// previous account's data and must never reach the new account's cache.
+  void dispose() {
+    for (final timer in _pendingTimers.values) {
+      timer.cancel();
+    }
+    _pendingTimers.clear();
+    _pendingWrites.clear();
+  }
+
+  SyncCursor? _readCursor(String key) {
+    final jsonStr = _prefs.getString(key);
+    if (jsonStr == null) return null;
+    try {
+      return SyncCursor.fromJson(jsonDecode(jsonStr) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _writeCursor(String key, SyncCursor? cursor) => cursor == null
+      ? _prefs.remove(key)
+      : _prefs.setString(key, jsonEncode(cursor.toJson()));
 
   // ─────────────────────────────────────────────────────────────────────────
   // Ownership
@@ -169,10 +284,34 @@ class CacheService {
   // Vocabulary Cache
   // ─────────────────────────────────────────────────────────────────────────
 
-  Future<void> cacheVocabularyList(List<VocabularyItem> items) async {
+  /// Stores the list now, replacing any deferred write.
+  ///
+  /// [syncCursor] records how far [items] match the server; without one the
+  /// next sync downloads everything.
+  Future<void> cacheVocabularyList(
+    List<VocabularyItem> items, {
+    SyncCursor? syncCursor,
+  }) async {
+    _cancelWrite(CacheKeys.vocabularyList);
     final jsonList = items.map((e) => e.toJson()).toList();
-    await _prefs.setString(CacheKeys.vocabularyList, jsonEncode(jsonList));
+    await Future.wait([
+      _prefs.setString(CacheKeys.vocabularyList, jsonEncode(jsonList)),
+      _writeCursor(CacheKeys.vocabularySync, syncCursor),
+    ]);
   }
+
+  /// Stores the list after [writeDelay]; a newer call replaces this one.
+  /// The sync cursor is kept: local edits mirror rows already saved on the
+  /// server.
+  void scheduleVocabularyList(List<VocabularyItem> items) {
+    _scheduleWrite(
+      CacheKeys.vocabularyList,
+      () => jsonEncode([for (final item in items) item.toJson()]),
+    );
+  }
+
+  SyncCursor? getVocabularySyncCursor() =>
+      _readCursor(CacheKeys.vocabularySync);
 
   List<VocabularyItem>? getCachedVocabularyList() {
     final jsonStr = _prefs.getString(CacheKeys.vocabularyList);
@@ -191,10 +330,36 @@ class CacheService {
   // Memory States Cache
   // ─────────────────────────────────────────────────────────────────────────
 
-  Future<void> cacheMemoryStates(List<MemoryState> states) async {
+  /// Stores the states now, replacing any deferred write (see
+  /// [cacheVocabularyList]).
+  Future<void> cacheMemoryStates(
+    List<MemoryState> states, {
+    SyncCursor? syncCursor,
+  }) async {
+    _cancelWrite(CacheKeys.memoryStates);
     final jsonList = states.map((e) => e.toJson()).toList();
-    await _prefs.setString(CacheKeys.memoryStates, jsonEncode(jsonList));
+    await Future.wait([
+      _prefs.setString(CacheKeys.memoryStates, jsonEncode(jsonList)),
+      _writeCursor(CacheKeys.memoryStatesSync, syncCursor),
+    ]);
   }
+
+  /// Stores the states after [writeDelay]; a newer call replaces this one.
+  void scheduleMemoryStates(List<MemoryState> states) {
+    _scheduleWrite(
+      CacheKeys.memoryStates,
+      () => jsonEncode([for (final state in states) state.toJson()]),
+    );
+  }
+
+  SyncCursor? getMemoryStatesSyncCursor() =>
+      _readCursor(CacheKeys.memoryStatesSync);
+
+  /// Forces the next memory-state sync to download everything. Used when a
+  /// local change could not be saved: the cache no longer mirrors the server
+  /// and a delta would never correct it.
+  Future<void> invalidateMemoryStatesSync() =>
+      _prefs.remove(CacheKeys.memoryStatesSync);
 
   List<MemoryState>? getCachedMemoryStates() {
     final jsonStr = _prefs.getString(CacheKeys.memoryStates);
@@ -229,30 +394,6 @@ class CacheService {
     } catch (_) {
       return null;
     }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Sync Timestamp
-  // ─────────────────────────────────────────────────────────────────────────
-
-  Future<void> updateLastSyncTime() async {
-    await _prefs.setInt(
-      CacheKeys.lastSyncTime,
-      DateTime.now().millisecondsSinceEpoch,
-    );
-  }
-
-  DateTime? getLastSyncTime() {
-    final ms = _prefs.getInt(CacheKeys.lastSyncTime);
-    if (ms == null) return null;
-    return DateTime.fromMillisecondsSinceEpoch(ms);
-  }
-
-  /// Returns true if cache is stale (older than [maxAge]).
-  bool isCacheStale({Duration maxAge = const Duration(minutes: 5)}) {
-    final lastSync = getLastSyncTime();
-    if (lastSync == null) return true;
-    return DateTime.now().difference(lastSync) > maxAge;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -306,6 +447,7 @@ class CacheService {
   // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> clearAll() async {
+    dispose();
     await Future.wait([
       for (final key in CacheKeys.userScoped) _prefs.remove(key),
       _prefs.remove(CacheKeys.owner),
@@ -326,6 +468,7 @@ final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
 /// previous account's data before anything reads it.
 final cacheServiceProvider = Provider<CacheService>((ref) {
   final service = CacheService(ref.watch(sharedPreferencesProvider));
+  ref.onDispose(service.dispose);
   service.bindToUser(ref.watch(currentUserIdProvider));
   return service;
 });

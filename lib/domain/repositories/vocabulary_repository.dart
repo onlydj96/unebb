@@ -2,6 +2,17 @@ import 'package:unebb/domain/models/vocabulary_item.dart';
 
 abstract interface class VocabularyRepository {
   Future<List<VocabularyItem>> getAll();
+
+  /// Words inserted or updated at or after [since] (server `updated_at`).
+  /// Used by delta sync instead of downloading every word again.
+  Future<List<VocabularyItem>> getUpdatedSince(DateTime since);
+
+  /// Number of the user's words, counted on the server (no rows returned).
+  Future<int> count();
+
+  /// IDs of all the user's words (detects words deleted elsewhere).
+  Future<Set<String>> getAllIds();
+
   Future<List<VocabularyItem>> getByDeckId(String deckId);
   Future<VocabularyItem?> getById(String id);
 

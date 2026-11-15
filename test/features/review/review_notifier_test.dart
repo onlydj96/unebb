@@ -191,6 +191,31 @@ void main() {
       expect(map['a']!.lastReviewedAt, isNotNull);
     });
 
+    test('a session reuses the loaded word list instead of downloading it',
+        () async {
+      final env = _Env(ids: ['a', 'b']);
+      final c = await env.container();
+      final n = _notifier(c);
+
+      await n.startSession(mode: 'all');
+      await n.startSession(mode: 'all');
+
+      expect(_state(c).phase, ReviewPhase.showWord);
+      expect(env.vocabRepo.getAllCalls, 1);
+      expect(env.memRepo.getAllCalls, 1);
+    });
+
+    test('a deck session only contains that deck\'s words', () async {
+      final env = _Env(ids: ['a', 'b']);
+      env.vocabRepo.items[1] = env.vocabRepo.items[1].copyWith(deckId: 'd1');
+      final c = await env.container();
+      final n = _notifier(c);
+
+      await n.startSession(mode: 'all', deckId: 'd1');
+
+      expect(_state(c).session!.vocabularyItems.map((v) => v.id), ['b']);
+    });
+
     test('missing AI content is generated before the answer is evaluated',
         () async {
       final env = _Env(ids: ['a'], definitions: {'a': null});

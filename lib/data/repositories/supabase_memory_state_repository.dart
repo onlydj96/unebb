@@ -24,6 +24,29 @@ class SupabaseMemoryStateRepository
   }
 
   @override
+  Future<List<MemoryState>> getUpdatedSince(DateTime since) async {
+    final rows = await _client
+        .from(tableName)
+        .select()
+        .eq('user_id', userId)
+        .gte('updated_at', since.toUtc().toIso8601String());
+    return rows.map((r) => MemoryState.fromJson(r)).toList();
+  }
+
+  @override
+  Future<int> count() =>
+      _client.from(tableName).count(CountOption.exact).eq('user_id', userId);
+
+  @override
+  Future<Set<String>> getAllVocabularyIds() async {
+    final rows = await _client
+        .from(tableName)
+        .select('vocabulary_id')
+        .eq('user_id', userId);
+    return {for (final r in rows) r['vocabulary_id'] as String};
+  }
+
+  @override
   Future<MemoryState?> getByVocabularyId(String vocabularyId) async {
     final rows = await _client
         .from(tableName)

@@ -7,6 +7,15 @@ abstract interface class MemoryStateRepository {
   /// single query, so the review screen needs one round trip instead of two.
   Future<List<MemoryState>> getAll();
 
+  /// States inserted or updated at or after [since] (server `updated_at`).
+  Future<List<MemoryState>> getUpdatedSince(DateTime since);
+
+  /// Number of the user's memory states, counted on the server.
+  Future<int> count();
+
+  /// Vocabulary IDs of all the user's memory states (detects deletions).
+  Future<Set<String>> getAllVocabularyIds();
+
   Future<MemoryState?> getByVocabularyId(String vocabularyId);
 
   Future<MemoryState> create({required String vocabularyId});

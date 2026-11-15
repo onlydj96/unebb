@@ -263,22 +263,20 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     ));
 
     try {
-      final vocabRepo = _ref.read(vocabularyRepositoryProvider);
-      final memRepo = _ref.read(memoryStateRepositoryProvider);
-
-      // 1. Everything independent in parallel: words, memory states (one
-      //    query, ordered client-side), global patterns and the learner's
-      //    native language (falls back to the default if the profile fails).
+      // 1. Everything independent in parallel: words and memory states (the
+      //    app-wide lists, brought up to date with a delta sync instead of a
+      //    full download), global patterns and the learner's native language
+      //    (falls back to the default if the profile fails).
       final results = await Future.wait<Object?>([
-        deckId != null ? vocabRepo.getByDeckId(deckId) : vocabRepo.getAll(),
-        memRepo.getAll(),
+        _ref.read(vocabularyNotifierProvider.notifier).sync(),
+        _ref.read(memoryStatesMapNotifierProvider.notifier).sync(),
         _loadGlobalPatterns(),
         readNativeLanguage(_ref),
       ]);
       if (!_isLive(epoch)) return;
 
-      final words = results[0] as List<VocabularyItem>;
-      var states = results[1] as List<MemoryState>;
+      final words = _inDeck(results[0] as List<VocabularyItem>, deckId);
+      var states = (results[1] as Map<String, MemoryState>).values.toList();
       final globalPatterns = results[2] as List<String>;
       final nativeLanguage = results[3] as String;
 
@@ -294,11 +292,12 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
           if (!known.contains(w.id)) w.id,
       ];
       if (missing.isNotEmpty) {
-        states = [
-          ...states,
-          ...await memRepo.createBatch(vocabularyIds: missing),
-        ];
+        final created = await _ref
+            .read(memoryStateRepositoryProvider)
+            .createBatch(vocabularyIds: missing);
         if (!_isLive(epoch)) return;
+        states = [...states, ...created];
+        _ref.read(memoryStatesMapNotifierProvider.notifier).addStates(created);
       }
 
       // 3. Select and order (new words first, then weighted priority).
@@ -347,24 +346,21 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     ));
 
     try {
-      final vocabRepo = _ref.read(vocabularyRepositoryProvider);
-      final memRepo = _ref.read(memoryStateRepositoryProvider);
       final deckId = progress.deckId;
 
       final results = await Future.wait<Object?>([
-        deckId != null ? vocabRepo.getByDeckId(deckId) : vocabRepo.getAll(),
-        memRepo.getAll(),
+        _ref.read(vocabularyNotifierProvider.notifier).sync(),
+        _ref.read(memoryStatesMapNotifierProvider.notifier).sync(),
         _loadGlobalPatterns(),
         readNativeLanguage(_ref),
       ]);
       if (!_isLive(epoch)) return;
 
       final wordsById = {
-        for (final w in results[0] as List<VocabularyItem>) w.id: w,
+        for (final w in _inDeck(results[0] as List<VocabularyItem>, deckId))
+          w.id: w,
       };
-      final statesById = {
-        for (final s in results[1] as List<MemoryState>) s.vocabularyId: s,
-      };
+      final statesById = results[1] as Map<String, MemoryState>;
 
       final start =
           progress.currentIndex.clamp(0, progress.vocabularyIds.length);
@@ -449,6 +445,17 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
   }
 
   bool _isLive(int epoch) => mounted && epoch == _epoch;
+
+  static List<VocabularyItem> _inDeck(
+    List<VocabularyItem> words,
+    String? deckId,
+  ) =>
+      deckId == null
+          ? words
+          : [
+              for (final w in words)
+                if (w.deckId == deckId) w
+            ];
 
   // ── Progress persistence ───────────────────────────────────────────────────
 
@@ -969,6 +976,9 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       await _ref.read(memoryStateRepositoryProvider).update(updated);
     } catch (e, st) {
       AppLogger.error('Failed to save memory state', error: e, stackTrace: st);
+      // The cached state now differs from the server's, which a delta sync
+      // would never correct: make the next sync download everything.
+      unawaited(_ref.read(cacheServiceProvider).invalidateMemoryStatesSync());
     }
   }
 

@@ -27,6 +27,27 @@ class SupabaseVocabularyRepository
   }
 
   @override
+  Future<List<VocabularyItem>> getUpdatedSince(DateTime since) async {
+    final rows = await client
+        .from(tableName)
+        .select()
+        .eq('user_id', userId)
+        .gte('updated_at', since.toUtc().toIso8601String());
+    return rows.map((r) => VocabularyItem.fromJson(r)).toList();
+  }
+
+  @override
+  Future<int> count() =>
+      client.from(tableName).count(CountOption.exact).eq('user_id', userId);
+
+  @override
+  Future<Set<String>> getAllIds() async {
+    final rows =
+        await client.from(tableName).select('id').eq('user_id', userId);
+    return {for (final r in rows) r['id'] as String};
+  }
+
+  @override
   Future<List<VocabularyItem>> getByDeckId(String deckId) async {
     final rows = await client
         .from(tableName)

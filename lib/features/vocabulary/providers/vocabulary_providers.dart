@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:unebb/core/exceptions/app_exceptions.dart';
 import 'package:unebb/core/providers/build_generation.dart';
 import 'package:unebb/core/services/cache_service.dart';
+import 'package:unebb/core/services/delta_sync.dart';
 import 'package:unebb/core/utils/logger.dart';
 import 'package:unebb/data/repositories/providers.dart';
 import 'package:unebb/domain/models/memory_state.dart';
@@ -17,17 +18,40 @@ import 'package:unebb/features/vocabulary/providers/ai_content_provider.dart';
 /// on `(user_id, lower(word), language)`).
 String normalizeWord(String word) => word.trim().toLowerCase();
 
+/// A [VocabularyNotifier.sync] / [MemoryStatesMapNotifier.sync] call within
+/// this long after a completed sync reuses its result.
+const Duration kResyncAfter = Duration(seconds: 30);
+
+/// Newest words first (the server's `created_at desc` order); ties keep their
+/// current order so the list does not reshuffle between syncs.
+List<VocabularyItem> _newestFirst(List<VocabularyItem> items) {
+  final indexed = items.indexed.toList()
+    ..sort((a, b) {
+      final byDate = b.$2.createdAt.compareTo(a.$2.createdAt);
+      return byDate != 0 ? byDate : a.$1.compareTo(b.$1);
+    });
+  return [for (final (_, item) in indexed) item];
+}
+
 /// Manages the full vocabulary list for the current user.
 ///
 /// Cache-first: cached words render instantly, then a background sync
-/// replaces them whenever the server copy differs (edits, AI content written
-/// by the Edge Function, other devices).
+/// applies whatever changed on the server (edits, AI content written by the
+/// Edge Function, other devices). The sync downloads only rows changed since
+/// the previous one (see [deltaSync]); a full download happens without a
+/// usable cache, once a day, and on pull-to-refresh.
 class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>>
     with BuildGeneration {
+  Object _build = Object();
+  Future<void>? _syncing;
+  DateTime? _lastSyncedAt;
+
   @override
   Future<List<VocabularyItem>> build() async {
     ref.keepAlive();
-    final generation = beginGeneration(ref);
+    final generation = _build = beginGeneration(ref);
+    _syncing = null;
+    _lastSyncedAt = null;
     final userId = ref.watch(currentUserIdProvider);
     if (userId == null) return const [];
 
@@ -35,23 +59,60 @@ class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>>
 
     final cached = cacheService.getCachedVocabularyList();
     if (cached != null && cached.isNotEmpty) {
-      unawaited(_syncInBackground(cacheService, generation));
+      _startSync(cacheService, generation, cached);
       return cached;
     }
 
-    final items = await ref.read(vocabularyRepositoryProvider).getAll();
-    await cacheService.cacheVocabularyList(items);
+    final (items, cursor) = await _fetchFresh(cacheService, null);
+    await cacheService.cacheVocabularyList(items, syncCursor: cursor);
+    _lastSyncedAt = DateTime.now();
     return items;
   }
 
-  Future<void> _syncInBackground(
+  /// Brings the list up to date with the server and returns it (used before
+  /// a review session). Joins a sync already running and skips the server
+  /// when one finished within [kResyncAfter]. Once the list has loaded this
+  /// never throws: offline, the current list is returned.
+  Future<List<VocabularyItem>> sync() async {
+    final loaded = await future;
+    final last = _lastSyncedAt;
+    final recent =
+        last != null && DateTime.now().difference(last) < kResyncAfter;
+    if (_syncing == null &&
+        !recent &&
+        ref.read(currentUserIdProvider) != null) {
+      _startSync(
+        ref.read(cacheServiceProvider),
+        _build,
+        state.valueOrNull ?? loaded,
+      );
+    }
+    await _syncing;
+    return state.valueOrNull ?? loaded;
+  }
+
+  void _startSync(
     CacheService cacheService,
     Object generation,
+    List<VocabularyItem> base,
+  ) {
+    final run = _syncWithServer(cacheService, generation, base);
+    _syncing = run;
+    unawaited(run.whenComplete(() {
+      if (identical(_syncing, run)) _syncing = null;
+    }));
+  }
+
+  Future<void> _syncWithServer(
+    CacheService cacheService,
+    Object generation,
+    List<VocabularyItem> base,
   ) async {
     try {
-      final items = await ref.read(vocabularyRepositoryProvider).getAll();
+      final (items, cursor) = await _fetchFresh(cacheService, base);
       if (!isCurrentGeneration(generation)) return;
-      await cacheService.cacheVocabularyList(items);
+      await cacheService.cacheVocabularyList(items, syncCursor: cursor);
+      _lastSyncedAt = DateTime.now();
       final current = state.valueOrNull;
       if (current == null || !listEquals(current, items)) {
         state = AsyncData(items);
@@ -60,6 +121,35 @@ class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>>
       AppLogger.warning('Background vocabulary sync failed', details: e);
       AppLogger.debug('Stack trace', data: st);
     }
+  }
+
+  /// The server's list, built from [base] plus the rows changed since the
+  /// cache's cursor when possible, otherwise downloaded in full.
+  Future<(List<VocabularyItem>, SyncCursor?)> _fetchFresh(
+    CacheService cacheService,
+    List<VocabularyItem>? base,
+  ) async {
+    final repo = ref.read(vocabularyRepositoryProvider);
+    final cursor = cacheService.getVocabularySyncCursor();
+    if (base != null && cursor != null && !cursor.isExpired) {
+      final delta = await deltaSync<VocabularyItem>(
+        cached: base,
+        since: cursor.updatedUpTo,
+        keyOf: (v) => v.id,
+        updatedAtOf: (v) => v.updatedAt,
+        fetchChanged: repo.getUpdatedSince,
+        fetchCount: repo.count,
+        fetchKeys: repo.getAllIds,
+      );
+      if (delta != null) {
+        return (
+          _newestFirst(delta.items),
+          cursor.advancedTo(delta.newestChange),
+        );
+      }
+    }
+    final items = await repo.getAll();
+    return (items, SyncCursor.afterFullSync(items.map((v) => v.updatedAt)));
   }
 
   /// Finds an existing word with the same spelling and language.
@@ -136,7 +226,7 @@ class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>>
     // 3. Optimistically show the word everywhere.
     final updatedList = [item, ...?state.valueOrNull];
     state = AsyncData(updatedList);
-    unawaited(ref.read(cacheServiceProvider).cacheVocabularyList(updatedList));
+    ref.read(cacheServiceProvider).scheduleVocabularyList(updatedList);
 
     // 4. Initial memory state so it enters the review queue. Not fatal: a
     //    review session creates missing states on its own.
@@ -230,7 +320,7 @@ class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>>
         .where((v) => v.id != id)
         .toList();
     state = AsyncData(updatedList);
-    unawaited(ref.read(cacheServiceProvider).cacheVocabularyList(updatedList));
+    ref.read(cacheServiceProvider).scheduleVocabularyList(updatedList);
 
     if (ref.exists(memoryStatesMapNotifierProvider)) {
       ref.read(memoryStatesMapNotifierProvider.notifier).removeStates({id});
@@ -247,7 +337,7 @@ class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>>
     final updatedList =
         current.where((v) => !removedIds.contains(v.id)).toList();
     state = AsyncData(updatedList);
-    unawaited(ref.read(cacheServiceProvider).cacheVocabularyList(updatedList));
+    ref.read(cacheServiceProvider).scheduleVocabularyList(updatedList);
     if (ref.exists(memoryStatesMapNotifierProvider)) {
       ref
           .read(memoryStatesMapNotifierProvider.notifier)
@@ -265,7 +355,7 @@ class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>>
       for (final v in current) v.id == item.id ? item : v,
     ];
     state = AsyncData(updatedList);
-    unawaited(ref.read(cacheServiceProvider).cacheVocabularyList(updatedList));
+    ref.read(cacheServiceProvider).scheduleVocabularyList(updatedList);
   }
 
   /// Pull-to-refresh. Keeps the current list on screen while loading and
@@ -276,7 +366,11 @@ class VocabularyNotifier extends AsyncNotifier<List<VocabularyItem>>
         const AsyncLoading<List<VocabularyItem>>().copyWithPrevious(previous);
     try {
       final items = await ref.read(vocabularyRepositoryProvider).getAll();
-      await ref.read(cacheServiceProvider).cacheVocabularyList(items);
+      await ref.read(cacheServiceProvider).cacheVocabularyList(
+            items,
+            syncCursor: SyncCursor.afterFullSync(items.map((v) => v.updatedAt)),
+          );
+      _lastSyncedAt = DateTime.now();
       state = AsyncData(items);
     } catch (e, st) {
       state = previous.hasValue ? previous : AsyncError(e, st);
@@ -303,14 +397,21 @@ final vocabularyItemProvider =
   return ref.read(vocabularyRepositoryProvider).getById(id);
 });
 
-/// Manages the memory states map with cache-first loading and optimistic
-/// updates (used by the dashboard, deck and word screens).
+/// Manages the memory states map with cache-first loading, delta sync and
+/// optimistic updates (used by the dashboard, deck, word and review screens).
+/// Syncing works like [VocabularyNotifier].
 class MemoryStatesMapNotifier extends AsyncNotifier<Map<String, MemoryState>>
     with BuildGeneration {
+  Object _build = Object();
+  Future<void>? _syncing;
+  DateTime? _lastSyncedAt;
+
   @override
   Future<Map<String, MemoryState>> build() async {
     ref.keepAlive();
-    final generation = beginGeneration(ref);
+    final generation = _build = beginGeneration(ref);
+    _syncing = null;
+    _lastSyncedAt = null;
     final userId = ref.watch(currentUserIdProvider);
     if (userId == null) return const {};
 
@@ -318,23 +419,58 @@ class MemoryStatesMapNotifier extends AsyncNotifier<Map<String, MemoryState>>
 
     final cached = cacheService.getCachedMemoryStates();
     if (cached != null && cached.isNotEmpty) {
-      unawaited(_syncInBackground(cacheService, generation));
+      _startSync(cacheService, generation, cached);
       return {for (final s in cached) s.vocabularyId: s};
     }
 
-    final states = await ref.read(memoryStateRepositoryProvider).getAll();
-    await cacheService.cacheMemoryStates(states);
+    final (states, cursor) = await _fetchFresh(cacheService, null);
+    await cacheService.cacheMemoryStates(states, syncCursor: cursor);
+    _lastSyncedAt = DateTime.now();
     return {for (final s in states) s.vocabularyId: s};
   }
 
-  Future<void> _syncInBackground(
+  /// Brings the states up to date with the server and returns them. Same
+  /// contract as [VocabularyNotifier.sync].
+  Future<Map<String, MemoryState>> sync() async {
+    final loaded = await future;
+    final last = _lastSyncedAt;
+    final recent =
+        last != null && DateTime.now().difference(last) < kResyncAfter;
+    if (_syncing == null &&
+        !recent &&
+        ref.read(currentUserIdProvider) != null) {
+      _startSync(
+        ref.read(cacheServiceProvider),
+        _build,
+        (state.valueOrNull ?? loaded).values.toList(),
+      );
+    }
+    await _syncing;
+    return state.valueOrNull ?? loaded;
+  }
+
+  void _startSync(
     CacheService cacheService,
     Object generation,
+    List<MemoryState> base,
+  ) {
+    final run = _syncWithServer(cacheService, generation, base);
+    _syncing = run;
+    unawaited(run.whenComplete(() {
+      if (identical(_syncing, run)) _syncing = null;
+    }));
+  }
+
+  Future<void> _syncWithServer(
+    CacheService cacheService,
+    Object generation,
+    List<MemoryState> base,
   ) async {
     try {
-      final states = await ref.read(memoryStateRepositoryProvider).getAll();
+      final (states, cursor) = await _fetchFresh(cacheService, base);
       if (!isCurrentGeneration(generation)) return;
-      await cacheService.cacheMemoryStates(states);
+      await cacheService.cacheMemoryStates(states, syncCursor: cursor);
+      _lastSyncedAt = DateTime.now();
       final fresh = {for (final s in states) s.vocabularyId: s};
       final current = state.valueOrNull;
       if (current == null || !mapEquals(current, fresh)) {
@@ -346,15 +482,44 @@ class MemoryStatesMapNotifier extends AsyncNotifier<Map<String, MemoryState>>
     }
   }
 
+  Future<(List<MemoryState>, SyncCursor?)> _fetchFresh(
+    CacheService cacheService,
+    List<MemoryState>? base,
+  ) async {
+    final repo = ref.read(memoryStateRepositoryProvider);
+    final cursor = cacheService.getMemoryStatesSyncCursor();
+    if (base != null && cursor != null && !cursor.isExpired) {
+      final delta = await deltaSync<MemoryState>(
+        cached: base,
+        since: cursor.updatedUpTo,
+        keyOf: (s) => s.vocabularyId,
+        updatedAtOf: (s) => s.updatedAt,
+        fetchChanged: repo.getUpdatedSince,
+        fetchCount: repo.count,
+        fetchKeys: repo.getAllVocabularyIds,
+      );
+      if (delta != null) {
+        return (delta.items, cursor.advancedTo(delta.newestChange));
+      }
+    }
+    final states = await repo.getAll();
+    return (states, SyncCursor.afterFullSync(states.map((s) => s.updatedAt)));
+  }
+
   void _set(Map<String, MemoryState> map) {
     state = AsyncData(map);
-    unawaited(
-      ref.read(cacheServiceProvider).cacheMemoryStates(map.values.toList()),
-    );
+    ref.read(cacheServiceProvider).scheduleMemoryStates(map.values.toList());
   }
 
   /// Add a single memory state (used after adding a word).
   void addState(MemoryState memoryState) => updateState(memoryState);
+
+  /// Insert or replace several states at once (one cache write).
+  void addStates(Iterable<MemoryState> states) {
+    final current = state.valueOrNull;
+    if (current == null || states.isEmpty) return;
+    _set({...current, for (final s in states) s.vocabularyId: s});
+  }
 
   /// Remove memory states (used after deleting words).
   void removeStates(Set<String> vocabularyIds) {
@@ -377,7 +542,12 @@ class MemoryStatesMapNotifier extends AsyncNotifier<Map<String, MemoryState>>
         .copyWithPrevious(previous);
     try {
       final states = await ref.read(memoryStateRepositoryProvider).getAll();
-      await ref.read(cacheServiceProvider).cacheMemoryStates(states);
+      await ref.read(cacheServiceProvider).cacheMemoryStates(
+            states,
+            syncCursor:
+                SyncCursor.afterFullSync(states.map((s) => s.updatedAt)),
+          );
+      _lastSyncedAt = DateTime.now();
       state = AsyncData({for (final s in states) s.vocabularyId: s});
     } catch (e, st) {
       state = previous.hasValue ? previous : AsyncError(e, st);
