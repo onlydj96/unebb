@@ -1,10 +1,15 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import "jsr:@supabase/functions-js@2/edge-runtime.d.ts";
 
 import { isUuid, requireUser, textResponse } from "../_shared/auth.ts";
-import { kanaOnly, kanjiReadingRule } from "../_shared/japanese.ts";
+import { kanaOnly } from "../_shared/japanese.ts";
 import { normalizeLanguage } from "../_shared/language.ts";
+import { chatJson } from "../_shared/openai.ts";
+import { buildExplanationRequest } from "./prompt.ts";
 
-const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+// The app gives up after 60s (AiExplanationService). The result is still
+// saved to the word if it arrives after that, so this only stops runaway
+// calls; it leaves room for the DB read before and the write after.
+const OPENAI_TIMEOUT_MS = 55_000;
 
 interface RequestBody {
   vocabulary_id: string;
@@ -22,40 +27,6 @@ interface ExplanationResponse {
   synonyms: string[];
   collocations: string[];
   common_mistakes: string[];
-}
-
-const systemPrompt = `You are a vocabulary learning assistant.
-Given a word and its language, generate educational content to help learners remember and use it.
-Return ONLY valid JSON — no markdown, no code fences, no extra text.`;
-
-// Every Japanese word written in kanji — in any field, including words quoted
-// inside the native-language explanation — carries its hiragana reading.
-const japaneseReadingRule = kanjiReadingRule([
-  "ANY field (definition, explanation, usage, examples, synonyms, collocations, common_mistakes)",
-]) +
-  `The "pronunciation" field is the exception: it is the hiragana reading of the whole word only.
-`;
-
-function buildUserPrompt(word: string, language: string, nativeLanguage: string): string {
-  const isJapanese = language === "Japanese";
-  const pronunciationGuide = isJapanese
-    ? "Hiragana reading (e.g. あいて for 相手)"
-    : "IPA phonetic transcription (e.g. /əˈbændən/ for English)";
-
-  return `Generate learning content for the ${language} word: "${word}"
-The learner's native language is ${nativeLanguage}. Write explanations in ${nativeLanguage}.
-${isJapanese ? japaneseReadingRule : ""}
-Return a JSON object with exactly these fields:
-{
-  "pronunciation": "${pronunciationGuide}",
-  "definition": "Clear, concise definition in ${nativeLanguage} (1-2 sentences)",
-  "explanation": "Explanation of nuance, origin, or context in ${nativeLanguage} (2-3 sentences)",
-  "usage": "When and how to use this word in ${nativeLanguage} (1-2 sentences)",
-  "examples": ["3 natural example sentences using the word in ${language}"],
-  "synonyms": ["3-5 synonyms or near-synonyms in ${language}"],
-  "collocations": ["4-6 common word combinations in ${language} (e.g. 'make a decision')"],
-  "common_mistakes": ["2-3 common mistakes ${nativeLanguage} speakers make, with corrections in ${nativeLanguage}"]
-}`;
 }
 
 function asText(value: unknown): string | null {
@@ -122,39 +93,13 @@ Deno.serve(async (req: Request) => {
   //    which used to skip the Japanese rules (IPA instead of hiragana, no
   //    kanji readings).
   const language = normalizeLanguage(row.language);
-  const openaiRes = await fetch(OPENAI_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: buildUserPrompt(row.word, language, nativeLanguage) },
-      ],
-    }),
+  const result = await chatJson({
+    apiKey: openaiKey,
+    timeoutMs: OPENAI_TIMEOUT_MS,
+    body: buildExplanationRequest(row.word, language, nativeLanguage),
   });
-
-  if (!openaiRes.ok) {
-    console.error("OpenAI error:", await openaiRes.text());
-    return textResponse("AI service error", 502);
-  }
-
-  const openaiJson = await openaiRes.json();
-  const content = openaiJson.choices?.[0]?.message?.content;
-  if (!content) return textResponse("Empty AI response", 502);
-
-  let raw: Record<string, unknown>;
-  try {
-    raw = JSON.parse(content);
-  } catch {
-    console.error("Failed to parse AI response:", content);
-    return textResponse("Invalid AI response format", 502);
-  }
+  if (!result.ok) return result.response;
+  const { json: raw, content } = result;
 
   // 4. Validate before persisting — a missing definition would leave the word
   //    unusable for reviews.
