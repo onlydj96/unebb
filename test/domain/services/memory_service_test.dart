@@ -182,21 +182,39 @@ void main() {
 
     // -- Strength & next review -----------------------------------------------
     test('correct answer increases memory strength', () {
-      // repetitions=2, interval=6 → after correct: interval=round(6*2.5)=15, strength=15/60=0.25
+      // repetitions=2, interval=6 → after correct: interval=round(6*2.5)=15
       final result = sut.applySmTwo(
-        _state(repetitions: 2, interval: 6, strength: 0.1),
+        _state(repetitions: 2, interval: 6, strength: 0.61),
         0.8,
       );
-      expect(result.memoryStrength, greaterThan(0.1));
+      expect(result.memoryStrength, greaterThan(0.61));
     });
 
-    test('incorrect answer resets interval so strength drops', () {
+    test('incorrect answer resets the streak so strength drops to critical',
+        () {
       final result = sut.applySmTwo(
-        _state(repetitions: 3, interval: 30, strength: 0.5),
+        _state(repetitions: 3, interval: 30, strength: 0.9),
         0.3,
       );
-      // interval reset to 1 → strength = 1/60 ≈ 0.017
-      expect(result.memoryStrength, lessThan(0.5));
+      expect(result.memoryStrength, 0.0);
+      expect(result.stage, 4);
+    });
+
+    test('each recall moves a new word up one label', () {
+      // Perfect answers from a fresh word: critical → weak → good → strong.
+      var state = _state();
+      final stages = <int>[];
+      for (var i = 0; i < 4; i++) {
+        state = sut.applySmTwo(state, 1.0);
+        stages.add(state.stage);
+      }
+      expect(stages, [3, 2, 2, 1]);
+    });
+
+    test('the lowest passing grade still leaves critical on the first recall',
+        () {
+      final result = sut.applySmTwo(_state(), 0.6);
+      expect(result.stage, 3);
     });
 
     test('strength always in [0.0, 1.0]', () {
@@ -217,23 +235,39 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // strengthFromInterval
+  // strengthFor
   // ---------------------------------------------------------------------------
-  group('strengthFromInterval', () {
-    test('interval 0 → strength 0.0', () {
-      expect(sut.strengthFromInterval(0), closeTo(0.0, 0.001));
+  group('strengthFor', () {
+    double s(int repetitions, int interval) =>
+        sut.strengthFor(repetitions: repetitions, intervalDays: interval);
+
+    test('no streak → 0.0 whatever the interval', () {
+      expect(s(0, 1), 0.0);
+      expect(s(0, 30), 0.0);
     });
 
-    test('interval 60 → strength 1.0', () {
-      expect(sut.strengthFromInterval(60), closeTo(1.0, 0.001));
+    test('first recall (1 day) → exactly 0.30, weak', () {
+      expect(s(1, 1), 0.30);
+      expect(sut.stageFromStrength(s(1, 1)), 3);
     });
 
-    test('interval > 60 capped at 1.0', () {
-      expect(sut.strengthFromInterval(120), closeTo(1.0, 0.001));
+    test('second recall (6 days) → good', () {
+      expect(s(2, 6), closeTo(0.606, 0.001));
+      expect(sut.stageFromStrength(s(2, 6)), 2);
     });
 
-    test('interval 30 → strength ~0.5', () {
-      expect(sut.strengthFromInterval(30), closeTo(0.5, 0.001));
+    test('interval 60 → 1.0, longer intervals capped', () {
+      expect(s(5, 60), closeTo(1.0, 0.001));
+      expect(s(6, 200), 1.0);
+    });
+
+    test('grows with the interval', () {
+      expect(s(3, 15), greaterThan(s(2, 6)));
+      expect(s(4, 40), greaterThan(s(3, 15)));
+    });
+
+    test('a zero interval with a streak is treated as one day', () {
+      expect(s(1, 0), 0.30);
     });
   });
 }

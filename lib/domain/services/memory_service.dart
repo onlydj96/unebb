@@ -21,9 +21,11 @@ import 'package:unebb/domain/models/memory_state.dart';
 ///   EF = EF + (0.1 - (5-grade)(0.08 + (5-grade)×0.02))
 ///   EF = max(1.3, EF)
 ///
-/// Memory strength (UI display only):
-///   strength = min(1.0, sm2_interval / 60.0)
-///   Stage derives from strength as before.
+/// Memory strength (UI display only), see [strengthFor]:
+///   not recalled yet / last answer wrong → 0.0 (critical)
+///   recalled → 0.30 + 0.70 × ln(interval) / ln(60), capped at 1.0
+///   so 1st recall → weak, 2nd–3rd → good, 4th → strong.
+///   Stage derives from strength.
 class MemoryService {
   const MemoryService();
 
@@ -93,7 +95,8 @@ class MemoryService {
     ef = ef + (0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02));
     ef = max(1.3, ef);
 
-    final newStrength = strengthFromInterval(interval);
+    final newStrength =
+        strengthFor(repetitions: repetitions, intervalDays: interval);
     final newStage = stageFromStrength(newStrength);
     final nextReview = DateTime.now().toUtc().add(Duration(days: interval));
 
@@ -117,10 +120,25 @@ class MemoryService {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /// Converts SM-2 interval (days) to a [0.0, 1.0] display strength.
-  /// 60 days = "fully known". Linear mapping capped at 1.0.
-  double strengthFromInterval(int intervalDays) =>
-      (intervalDays / 60.0).clamp(0.0, 1.0);
+  /// Converts the SM-2 streak and interval to a [0.0, 1.0] display strength.
+  ///
+  /// The interval alone cannot tell a first recall from a miss (both give
+  /// 1 day), so the streak decides: no streak → critical, any recall →
+  /// at least weak. Above that the interval grows on a log scale so every
+  /// recall moves the word visibly; 60 days counts as fully known.
+  ///
+  ///   recall #1 (1 day)   → 0.30 weak
+  ///   recall #2 (6 days)  → 0.61 good
+  ///   recall #3 (~15 days) → 0.76 good
+  ///   recall #4 (~40 days) → 0.93 strong
+  ///
+  /// Mirrored by the backfill in
+  /// `supabase/migrations/20261116000001_recompute_memory_strength.sql`.
+  double strengthFor({required int repetitions, required int intervalDays}) {
+    if (repetitions <= 0) return 0.0;
+    final days = max(1, intervalDays);
+    return (0.30 + 0.70 * log(days) / log(60)).clamp(0.0, 1.0);
+  }
 
   /// Legacy: computes next review from stage (kept for compatibility).
   DateTime calculateNextReview(int stage) {

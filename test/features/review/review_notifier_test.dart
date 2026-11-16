@@ -192,6 +192,29 @@ void main() {
       expect(map['a']!.lastReviewedAt, isNotNull);
     });
 
+    test('a recalled meaning stays correct despite a weak translation',
+        () async {
+      final env = _Env(ids: ['a']);
+      env.evalService.translationScore = 0.1; // weighted: 0.9*0.4+0.1*0.6=0.42
+      final c = await env.container();
+      final n = _notifier(c);
+
+      await n.startSession(mode: 'all');
+      n.tapWord();
+      n.answerKnowWord();
+      await n.submitMeaning('meaning');
+      await n.submitTranslation('weak sentence');
+
+      final state = _state(c);
+      expect(state.phase, ReviewPhase.showResult);
+      expect(state.combinedScore, kPassScore);
+      expect(state.correctCount, 1);
+      final saved = env.memRepo.updates.single;
+      expect(saved.correctCount, 1);
+      expect(saved.incorrectCount, 0);
+      expect(saved.sm2Repetitions, 1);
+    });
+
     test('a session reuses the loaded word list instead of downloading it',
         () async {
       final env = _Env(ids: ['a', 'b']);

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -40,6 +41,8 @@ enum ReviewPhase {
 }
 
 /// Weight of the meaning step in the combined score (translation = rest).
+/// The combined score only sets the SM-2 grade of a word whose meaning was
+/// already recalled; it never turns that word into a miss.
 const double kMeaningWeight = 0.4;
 
 /// Below this AI score an answer counts as wrong (SM-2 grade < 3).
@@ -958,10 +961,14 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
   }) async {
     final meaningEvaluation = state.meaningEvaluation ?? const AiEvaluation();
     final transScore = translationEvaluation?.overallScore;
-    final combined = transScore != null
+    final weighted = transScore != null
         ? meaningEvaluation.overallScore * kMeaningWeight +
             transScore * (1 - kMeaningWeight)
         : meaningEvaluation.overallScore;
+    // Recalling the meaning is what decides pass/fail, and only a passed
+    // meaning gets here. A weak sentence can still lower the grade (shorter
+    // next interval) but must not reset a word the learner knew.
+    final combined = max(kPassScore, weighted);
     final correct = _ref.read(memoryServiceProvider).isCorrectAnswer(combined);
 
     await _grade(
