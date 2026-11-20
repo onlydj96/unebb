@@ -12,6 +12,7 @@ import 'package:unebb/features/auth/providers/auth_provider.dart';
 import 'package:unebb/features/auth/providers/profile_provider.dart';
 import 'package:unebb/features/auth/screens/login_screen.dart';
 import 'package:unebb/features/decks/providers/deck_providers.dart';
+import 'package:unebb/features/home/screens/dashboard_screen.dart';
 import 'package:unebb/features/review/providers/review_providers.dart';
 import 'package:unebb/features/review/screens/review_screen.dart';
 import 'package:unebb/features/vocabulary/providers/vocabulary_providers.dart';
@@ -50,8 +51,12 @@ class _FakeDeckNotifier extends DeckNotifier {
 }
 
 class _FakeMemoryNotifier extends MemoryStatesMapNotifier {
+  _FakeMemoryNotifier([this.states = const []]);
+  final List<MemoryState> states;
+
   @override
-  Future<Map<String, MemoryState>> build() async => const {};
+  Future<Map<String, MemoryState>> build() async =>
+      {for (final s in states) s.vocabularyId: s};
 }
 
 class _LoadingReviewNotifier extends ReviewNotifier {
@@ -69,13 +74,15 @@ class _LoadingReviewNotifier extends ReviewNotifier {
 List<Override> _offlineOverrides({
   List<VocabularyItem> words = const [],
   List<Deck> decks = const [],
+  List<MemoryState> memory = const [],
 }) =>
     [
       currentUserIdProvider.overrideWithValue(kTestUserId),
       vocabularyNotifierProvider
           .overrideWith(() => _FakeVocabularyNotifier(words)),
       deckNotifierProvider.overrideWith(() => _FakeDeckNotifier(decks)),
-      memoryStatesMapNotifierProvider.overrideWith(_FakeMemoryNotifier.new),
+      memoryStatesMapNotifierProvider
+          .overrideWith(() => _FakeMemoryNotifier(memory)),
       profileProvider.overrideWith((ref) async => null),
     ];
 
@@ -103,6 +110,47 @@ void main() {
       await testApp(const LoginScreen(), locale: const Locale('ko')),
     );
     expect(find.text('로그인'), findsWidgets);
+  });
+
+  // ── DashboardScreen ────────────────────────────────────────────────────────
+
+  testWidgets('Dashboard memory health reflects time since the due date',
+      (tester) async {
+    final now = DateTime.now().toUtc();
+    await tester.pumpWidget(await testApp(
+      const DashboardScreen(),
+      overrides: _offlineOverrides(
+        words: [vocab('fresh'), vocab('neglected'), vocab('new')],
+        memory: [
+          memory('fresh',
+              reviewCount: 4,
+              interval: 45,
+              repetitions: 4,
+              nextReviewAt: now.add(const Duration(days: 10))),
+          // Strong when last reviewed, but 300 days overdue.
+          memory('neglected',
+              reviewCount: 4,
+              interval: 45,
+              repetitions: 4,
+              nextReviewAt: now.subtract(const Duration(days: 300))),
+          memory('new'),
+        ],
+      ),
+    ));
+    await tester.pump();
+
+    expect(find.text('2 words'), findsOneWidget); // reviewed words only
+    expect(find.text('Strong 1'), findsOneWidget);
+    expect(find.text('Weak 1'), findsOneWidget);
+    // Mastered tile.
+    expect(
+      find.descendant(
+        of: find.ancestor(
+            of: find.text('Mastered'), matching: find.byType(Card)),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
   });
 
   // ── VocabularyListScreen ───────────────────────────────────────────────────

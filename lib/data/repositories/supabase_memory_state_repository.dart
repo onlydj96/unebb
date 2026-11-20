@@ -91,28 +91,47 @@ class SupabaseMemoryStateRepository
     return rows.map((r) => MemoryState.fromJson(r)).toList();
   }
 
+  Map<String, dynamic> _reviewFields(MemoryState state) => {
+        'memory_strength': state.memoryStrength,
+        'recall_probability': state.recallProbability,
+        'stage': state.stage,
+        'last_reviewed_at': state.lastReviewedAt?.toIso8601String(),
+        'next_review_at': state.nextReviewAt.toIso8601String(),
+        'review_count': state.reviewCount,
+        'correct_count': state.correctCount,
+        'incorrect_count': state.incorrectCount,
+        'consecutive_correct': state.consecutiveCorrect,
+        'ease_factor': state.easeFactor,
+        'sm2_interval': state.sm2Interval,
+        'sm2_repetitions': state.sm2Repetitions,
+      };
+
   @override
   Future<MemoryState> update(MemoryState state) async {
     final row = await _client
         .from(tableName)
-        .update({
-          'memory_strength': state.memoryStrength,
-          'recall_probability': state.recallProbability,
-          'stage': state.stage,
-          'last_reviewed_at': state.lastReviewedAt?.toIso8601String(),
-          'next_review_at': state.nextReviewAt.toIso8601String(),
-          'review_count': state.reviewCount,
-          'correct_count': state.correctCount,
-          'incorrect_count': state.incorrectCount,
-          'consecutive_correct': state.consecutiveCorrect,
-          'ease_factor': state.easeFactor,
-          'sm2_interval': state.sm2Interval,
-          'sm2_repetitions': state.sm2Repetitions,
-        })
+        .update(_reviewFields(state))
         .eq('id', state.id)
         .eq('user_id', userId)
         .select()
         .single();
     return MemoryState.fromJson(row);
+  }
+
+  @override
+  Future<MemoryState?> updateIfNewer(MemoryState state) async {
+    var query = _client
+        .from(tableName)
+        .update(_reviewFields(state))
+        .eq('id', state.id)
+        .eq('user_id', userId);
+    final reviewedAt = state.lastReviewedAt;
+    if (reviewedAt != null) {
+      // Quoted: the timestamp contains PostgREST's reserved `.` and `:`.
+      final at = reviewedAt.toUtc().toIso8601String();
+      query = query.or('last_reviewed_at.is.null,last_reviewed_at.lt."$at"');
+    }
+    final rows = await query.select();
+    return rows.isEmpty ? null : MemoryState.fromJson(rows.first);
   }
 }

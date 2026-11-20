@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:unebb/core/l10n/l10n.dart';
+import 'package:unebb/core/providers/clock_provider.dart';
 import 'package:unebb/core/theme/app_spacing.dart';
 import 'package:unebb/core/theme/app_tone.dart';
 import 'package:unebb/core/utils/logger.dart';
+import 'package:unebb/data/repositories/providers.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
 import 'package:unebb/features/vocabulary/providers/ai_content_provider.dart';
 import 'package:unebb/features/vocabulary/providers/vocabulary_providers.dart';
@@ -53,6 +55,8 @@ class VocabularyListView extends ConsumerWidget {
     final l10n = context.l10n;
     final memoryMap =
         ref.watch(memoryStatesMapNotifierProvider).valueOrNull ?? const {};
+    final memoryService = ref.watch(memoryServiceProvider);
+    final now = ref.watch(clockProvider);
     final aiStatus = ref.watch(aiContentProvider);
 
     return wordsAsync.when(
@@ -80,9 +84,12 @@ class VocabularyListView extends ConsumerWidget {
             separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
             itemBuilder: (context, index) {
               final item = items[index];
+              final memory = memoryMap[item.id];
               return VocabularyCard(
                 item: item,
-                memoryStrength: memoryMap[item.id]?.memoryStrength,
+                memoryStrength: memory == null
+                    ? null
+                    : memoryService.currentStrength(memory, now),
                 aiState: aiCardState(item, aiStatus[item.id]),
                 retryTooltip: l10n.generateExplanation,
                 onRetryAi: () =>

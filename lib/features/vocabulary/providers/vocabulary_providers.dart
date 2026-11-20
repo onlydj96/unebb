@@ -482,10 +482,14 @@ class MemoryStatesMapNotifier extends AsyncNotifier<Map<String, MemoryState>>
     }
   }
 
+  /// The server's states (delta from [base] when possible, else a full
+  /// download) after saving pending reviews; reviews still pending replace
+  /// the server's copy.
   Future<(List<MemoryState>, SyncCursor?)> _fetchFresh(
     CacheService cacheService,
     List<MemoryState>? base,
   ) async {
+    await _savePending(cacheService);
     final repo = ref.read(memoryStateRepositoryProvider);
     final cursor = cacheService.getMemoryStatesSyncCursor();
     if (base != null && cursor != null && !cursor.isExpired) {
@@ -499,11 +503,51 @@ class MemoryStatesMapNotifier extends AsyncNotifier<Map<String, MemoryState>>
         fetchKeys: repo.getAllVocabularyIds,
       );
       if (delta != null) {
-        return (delta.items, cursor.advancedTo(delta.newestChange));
+        return (
+          _withPending(cacheService, delta.items),
+          cursor.advancedTo(delta.newestChange),
+        );
       }
     }
     final states = await repo.getAll();
-    return (states, SyncCursor.afterFullSync(states.map((s) => s.updatedAt)));
+    return (
+      _withPending(cacheService, states),
+      SyncCursor.afterFullSync(states.map((s) => s.updatedAt)),
+    );
+  }
+
+  /// Saves reviews whose save failed earlier, oldest first. Entries the
+  /// server does not need any more (it holds that review or a newer one, or
+  /// the word was deleted) are dropped too; the rest wait for the next sync.
+  Future<void> _savePending(CacheService cacheService) async {
+    final pending = cacheService.getPendingMemoryStates();
+    if (pending.isEmpty) return;
+    final repo = ref.read(memoryStateRepositoryProvider);
+    final settled = <MemoryState>[];
+    try {
+      for (final state in pending) {
+        await repo.updateIfNewer(state);
+        settled.add(state);
+      }
+    } catch (e) {
+      AppLogger.warning('Saving pending memory states failed', details: e);
+    } finally {
+      await cacheService.removePendingMemoryStates(settled);
+    }
+  }
+
+  /// [states] with every still-pending review of an existing word applied.
+  List<MemoryState> _withPending(
+    CacheService cacheService,
+    List<MemoryState> states,
+  ) {
+    final pending = cacheService.getPendingMemoryStates();
+    if (pending.isEmpty) return states;
+    final byWord = {for (final s in states) s.vocabularyId: s};
+    for (final p in pending) {
+      if (byWord.containsKey(p.vocabularyId)) byWord[p.vocabularyId] = p;
+    }
+    return byWord.values.toList();
   }
 
   void _set(Map<String, MemoryState> map) {
@@ -535,18 +579,16 @@ class MemoryStatesMapNotifier extends AsyncNotifier<Map<String, MemoryState>>
     _set({...current, memoryState.vocabularyId: memoryState});
   }
 
-  /// Pull-to-refresh; rethrows on failure (previous data is kept).
+  /// Pull-to-refresh (full download); rethrows on failure (previous data is
+  /// kept).
   Future<void> refresh() async {
     final previous = state;
     state = const AsyncLoading<Map<String, MemoryState>>()
         .copyWithPrevious(previous);
     try {
-      final states = await ref.read(memoryStateRepositoryProvider).getAll();
-      await ref.read(cacheServiceProvider).cacheMemoryStates(
-            states,
-            syncCursor:
-                SyncCursor.afterFullSync(states.map((s) => s.updatedAt)),
-          );
+      final cacheService = ref.read(cacheServiceProvider);
+      final (states, cursor) = await _fetchFresh(cacheService, null);
+      await cacheService.cacheMemoryStates(states, syncCursor: cursor);
       _lastSyncedAt = DateTime.now();
       state = AsyncData({for (final s in states) s.vocabularyId: s});
     } catch (e, st) {

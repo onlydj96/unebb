@@ -51,6 +51,25 @@ otherwise           → 0.30 + 0.70 × ln(interval) / ln(60), max 1.0
 | 3 | ~15 days | ~0.76 | 2 (good) |
 | 4 | ~40 days | ~0.93 | 1 (strong) |
 
+The table assumes each recall happens on its due date. A correct answer
+before `next_review_at` (e.g. in a "review all" session) is counted but
+leaves the schedule and strength unchanged, so repeated sessions on one
+day cannot push a word up; a wrong answer resets it as usual.
+
+What screens show is `MemoryService.currentStrength`: the strength above
+until the review is due, then decayed along the forgetting curve SM-2
+schedules by, R(t) = 0.9^(t / interval). An overdue word's strength is
+scaled by 0.9^(days overdue / interval): one interval overdue → ×0.9,
+five → ×0.59, ten → ×0.35. It depends on the current time, so it is
+computed on the client (`clockProvider` ticks every minute) and never
+stored; `memory_strength` holds the value right after the last review.
+
+A review whose save fails (offline, server error) is kept in a local
+queue, shown in place of the server's copy, and saved by the next
+memory-state sync (app start, resume, reconnect, review start,
+pull-to-refresh). It is only written if the server has no newer review of
+that word (`last_reviewed_at`), so it never overwrites another device.
+
 ## Memory Update
 
 Memory strength must be updated after every review.

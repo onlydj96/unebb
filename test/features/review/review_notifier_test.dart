@@ -215,6 +215,100 @@ void main() {
       expect(saved.sm2Repetitions, 1);
     });
 
+    test('a correct answer before the word is due keeps its schedule',
+        () async {
+      final env = _Env(ids: ['a']);
+      final due = DateTime.now().toUtc().add(const Duration(days: 3));
+      env.memRepo.states[0] = memory('a',
+          reviewCount: 2, interval: 6, repetitions: 2, nextReviewAt: due);
+      final c = await env.container();
+      final n = _notifier(c);
+
+      await n.startSession(mode: 'all');
+      n.tapWord();
+      n.answerKnowWord();
+      await n.submitMeaning('meaning');
+      await n.submitTranslation('translation');
+      expect(_state(c).phase, ReviewPhase.showResult);
+
+      final saved = env.memRepo.updates.single;
+      expect(saved.reviewCount, 3);
+      expect(saved.sm2Interval, 6);
+      expect(saved.nextReviewAt, due);
+      expect(_state(c).updatedStrength, _state(c).previousStrength);
+    });
+
+    test('a review that fails to save stays visible and is saved later',
+        () async {
+      final env = _Env(ids: ['a']);
+      env.memRepo.updateError = Exception('offline');
+      final c = await env.container();
+      c.listen(memoryStatesMapNotifierProvider, (_, __) {});
+      final memoryStates = c.read(memoryStatesMapNotifierProvider.notifier);
+      await c.read(memoryStatesMapNotifierProvider.future);
+      final n = _notifier(c);
+
+      await n.startSession(mode: 'all');
+      n.tapWord();
+      await n.answerDontKnowWord();
+
+      final cache = c.read(cacheServiceProvider);
+      expect(cache.getPendingMemoryStates().single.vocabularyId, 'a');
+
+      // Still offline: a sync must not bring back the server's old copy.
+      await memoryStates.refresh();
+      expect(
+          c
+              .read(memoryStatesMapNotifierProvider)
+              .requireValue['a']!
+              .reviewCount,
+          1);
+
+      // Back online: the next sync saves it.
+      env.memRepo.updateError = null;
+      await memoryStates.refresh();
+      expect(env.memRepo.states.single.reviewCount, 1);
+      expect(env.memRepo.states.single.incorrectCount, 1);
+      expect(cache.getPendingMemoryStates(), isEmpty);
+      expect(
+          c
+              .read(memoryStatesMapNotifierProvider)
+              .requireValue['a']!
+              .reviewCount,
+          1);
+    });
+
+    test('a pending review never overwrites a newer one from another device',
+        () async {
+      final env = _Env(ids: ['a']);
+      env.memRepo.updateError = Exception('offline');
+      final c = await env.container();
+      c.listen(memoryStatesMapNotifierProvider, (_, __) {});
+      final memoryStates = c.read(memoryStatesMapNotifierProvider.notifier);
+      await c.read(memoryStatesMapNotifierProvider.future);
+      final n = _notifier(c);
+
+      await n.startSession(mode: 'all');
+      n.tapWord();
+      await n.answerDontKnowWord();
+
+      // Meanwhile the word was reviewed again elsewhere.
+      env.memRepo.states[0] = memory('a',
+          reviewCount: 5,
+          lastReviewedAt: DateTime.now().toUtc().add(const Duration(hours: 1)));
+      env.memRepo.updateError = null;
+      await memoryStates.refresh();
+
+      expect(env.memRepo.updates, isEmpty);
+      expect(c.read(cacheServiceProvider).getPendingMemoryStates(), isEmpty);
+      expect(
+          c
+              .read(memoryStatesMapNotifierProvider)
+              .requireValue['a']!
+              .reviewCount,
+          5);
+    });
+
     test('a session reuses the loaded word list instead of downloading it',
         () async {
       final env = _Env(ids: ['a', 'b']);

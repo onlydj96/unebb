@@ -5,11 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:unebb/core/l10n/l10n.dart';
+import 'package:unebb/core/providers/clock_provider.dart';
 import 'package:unebb/core/theme/app_colors.dart';
 import 'package:unebb/core/theme/app_spacing.dart';
 import 'package:unebb/core/theme/app_tone.dart';
 import 'package:unebb/core/theme/app_typography.dart';
 import 'package:unebb/core/utils/logger.dart';
+import 'package:unebb/data/repositories/providers.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
 import 'package:unebb/domain/models/word_reading.dart';
 import 'package:unebb/features/vocabulary/providers/ai_content_provider.dart';
@@ -170,7 +172,9 @@ class _WordDetailBodyState extends ConsumerState<_WordDetailBody> {
               child: Padding(
                 padding: const EdgeInsets.all(AppSpacing.md),
                 child: MemoryIndicator(
-                  strength: memory.memoryStrength,
+                  strength: ref
+                      .watch(memoryServiceProvider)
+                      .currentStrength(memory, ref.watch(clockProvider)),
                   showLabel: true,
                   height: 6,
                 ),

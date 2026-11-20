@@ -59,6 +59,8 @@ MemoryState memory(
   int reviewCount = 0,
   double strength = 0.0,
   int incorrectCount = 0,
+  int interval = 1,
+  int repetitions = 0,
   DateTime? nextReviewAt,
   DateTime? lastReviewedAt,
   String userId = kTestUserId,
@@ -79,6 +81,8 @@ MemoryState memory(
     correctCount: 0,
     incorrectCount: incorrectCount,
     consecutiveCorrect: 0,
+    sm2Interval: interval,
+    sm2Repetitions: repetitions,
     createdAt: _epoch,
     updatedAt: _epoch,
   );
@@ -221,6 +225,9 @@ class FakeMemoryStateRepository implements MemoryStateRepository {
   final List<MemoryState> updates = [];
   int getAllCalls = 0;
 
+  /// When set, saving a state throws this (e.g. offline).
+  Object? updateError;
+
   @override
   Future<List<MemoryState>> getAll() async {
     getAllCalls++;
@@ -262,9 +269,27 @@ class FakeMemoryStateRepository implements MemoryStateRepository {
 
   @override
   Future<MemoryState> update(MemoryState state) async {
+    final error = updateError;
+    if (error != null) throw error;
     updates.add(state);
     final index = states.indexWhere((s) => s.id == state.id);
     if (index >= 0) states[index] = state;
+    return state;
+  }
+
+  @override
+  Future<MemoryState?> updateIfNewer(MemoryState state) async {
+    final error = updateError;
+    if (error != null) throw error;
+    final index = states.indexWhere((s) => s.id == state.id);
+    if (index < 0) return null;
+    final saved = states[index].lastReviewedAt;
+    final reviewed = state.lastReviewedAt;
+    if (saved != null && reviewed != null && !saved.isBefore(reviewed)) {
+      return null;
+    }
+    updates.add(state);
+    states[index] = state;
     return state;
   }
 }

@@ -14,7 +14,8 @@ abstract class MemoryState with _$MemoryState {
     required int stage,
     required double memoryStrength,
 
-    /// MVP: mirrors memoryStrength. Reserved for future time-decay calculation.
+    /// Stored copy of memoryStrength at review time. The time-aware value
+    /// shown in the app is `MemoryService.currentStrength`.
     required double recallProbability,
     DateTime? lastReviewedAt,
     required DateTime nextReviewAt,

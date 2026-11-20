@@ -8,6 +8,7 @@ import 'package:unebb/core/router/app_router.dart';
 import 'package:unebb/core/services/cache_service.dart';
 import 'package:unebb/core/theme/app_theme.dart';
 import 'package:unebb/features/auth/providers/auth_provider.dart';
+import 'package:unebb/features/common/widgets/app_lifecycle_sync.dart';
 import 'package:unebb/l10n/app_localizations.dart';
 
 Future<void> main() async {
@@ -44,20 +45,22 @@ class UnEbbApp extends ConsumerWidget {
       if (previous != next) ref.read(cacheServiceProvider);
     });
 
-    return MaterialApp.router(
-      title: AppConstants.appName,
-      theme: AppTheme.light,
-      routerConfig: router,
-      localizationsDelegates: const [
-        AppLocalizations.delegate,
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
-      supportedLocales: const [
-        Locale('en'),
-        Locale('ko'),
-      ],
+    return AppLifecycleSync(
+      child: MaterialApp.router(
+        title: AppConstants.appName,
+        theme: AppTheme.light,
+        routerConfig: router,
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: const [
+          Locale('en'),
+          Locale('ko'),
+        ],
+      ),
     );
   }
 }

@@ -3,12 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:unebb/core/l10n/l10n.dart';
+import 'package:unebb/core/providers/clock_provider.dart';
 import 'package:unebb/core/theme/app_colors.dart';
 import 'package:unebb/core/theme/app_radius.dart';
 import 'package:unebb/core/theme/app_spacing.dart';
 import 'package:unebb/core/theme/app_tone.dart';
 import 'package:unebb/core/theme/app_typography.dart';
 import 'package:unebb/core/utils/logger.dart';
+import 'package:unebb/data/repositories/providers.dart';
 import 'package:unebb/domain/models/deck.dart';
 import 'package:unebb/domain/models/memory_state.dart';
 import 'package:unebb/features/auth/providers/profile_provider.dart';
@@ -51,7 +53,18 @@ class DashboardScreen extends ConsumerWidget {
     final wordCount = ref.watch(vocabularyNotifierProvider).valueOrNull?.length;
     final dueCount = ref.watch(dueCountProvider(null));
     final name = ref.watch(profileProvider).valueOrNull?.displayName.trim();
-    final reviewed = memoryMap?.values.where((s) => s.reviewCount > 0).toList();
+    final memoryService = ref.watch(memoryServiceProvider);
+    final now = ref.watch(clockProvider);
+    // Reviewed words per stage at the current time (decayed when overdue),
+    // index 0 = critical … 3 = strong.
+    final stageCounts = memoryMap == null ? null : List.filled(4, 0);
+    for (final s in memoryMap?.values ?? const <MemoryState>[]) {
+      if (s.reviewCount == 0) continue;
+      final stage = memoryService.stageFromStrength(
+        memoryService.currentStrength(s, now),
+      );
+      stageCounts![4 - stage]++;
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -119,18 +132,16 @@ class DashboardScreen extends ConsumerWidget {
                     child: _StatTile(
                       icon: Icons.workspace_premium_outlined,
                       iconColor: AppColors.successText,
-                      value: memoryMap?.values
-                          .where((s) => s.memoryStrength >= 0.8)
-                          .length,
+                      value: stageCounts?.last,
                       label: l10n.statMastered,
                     ),
                   ),
                 ],
               ),
             ),
-            if (reviewed != null && reviewed.isNotEmpty) ...[
+            if (stageCounts != null && stageCounts.any((c) => c > 0)) ...[
               const SizedBox(height: 10),
-              _MemoryHealthCard(states: reviewed),
+              _MemoryHealthCard(counts: stageCounts),
             ],
             const SizedBox(height: AppSpacing.xl),
             _RecentDecks(decksAsync: decksAsync),
@@ -272,27 +283,17 @@ class _StatTile extends StatelessWidget {
 
 /// Reviewed words split by memory stage, ordered ebb → flow.
 class _MemoryHealthCard extends StatelessWidget {
-  const _MemoryHealthCard({required this.states});
+  const _MemoryHealthCard({required this.counts});
 
-  final List<MemoryState> states;
+  /// Words per stage, critical → strong.
+  final List<int> counts;
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     // Representative strengths for each stage, critical → strong.
     const stageSamples = [0.0, 0.3, 0.6, 0.8];
-    final counts = List.filled(stageSamples.length, 0);
-    for (final s in states) {
-      final strength = s.memoryStrength;
-      final index = strength >= 0.8
-          ? 3
-          : strength >= 0.6
-              ? 2
-              : strength >= 0.3
-                  ? 1
-                  : 0;
-      counts[index]++;
-    }
+    final total = counts.fold(0, (sum, c) => sum + c);
 
     return Card(
       child: Padding(
@@ -309,7 +310,7 @@ class _MemoryHealthCard extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  l10n.wordCount(states.length),
+                  l10n.wordCount(total),
                   style: AppTypography.labelMedium,
                 ),
               ],

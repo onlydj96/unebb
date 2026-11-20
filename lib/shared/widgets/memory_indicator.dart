@@ -118,25 +118,39 @@ class MemoryStrengthDelta extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final improved = updated >= previous;
-    final delta = ((updated - previous) * 100).round().abs();
-    final arrow = improved ? '↑' : '↓';
-    final foreground = improved ? AppColors.successText : AppColors.error;
+    final change = ((updated - previous) * 100).round();
+    // Unchanged (e.g. a correct answer before the word was due): neutral.
+    final (icon, foreground, background, deltaLabel) = switch (change.sign) {
+      1 => (
+          Icons.trending_up_rounded,
+          AppColors.successText,
+          AppColors.successSoft,
+          '↑$change%',
+        ),
+      -1 => (
+          Icons.trending_down_rounded,
+          AppColors.error,
+          AppColors.errorSoft,
+          '↓${-change}%',
+        ),
+      _ => (
+          Icons.trending_flat_rounded,
+          AppColors.textSecondary,
+          AppColors.surfaceElevated,
+          null,
+        ),
+    };
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: improved ? AppColors.successSoft : AppColors.errorSoft,
+        color: background,
         borderRadius: AppRadius.fullBorder,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            improved ? Icons.trending_up_rounded : Icons.trending_down_rounded,
-            size: 18,
-            color: foreground,
-          ),
+          Icon(icon, size: 18, color: foreground),
           const SizedBox(width: 8),
           Text(
             '${(previous * 100).round()}% → ${(updated * 100).round()}%',
@@ -145,14 +159,16 @@ class MemoryStrengthDelta extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(width: 8),
-          Text(
-            '$arrow$delta%',
-            style: AppTypography.labelMedium.copyWith(
-              color: foreground,
-              fontWeight: FontWeight.w700,
+          if (deltaLabel != null) ...[
+            const SizedBox(width: 8),
+            Text(
+              deltaLabel,
+              style: AppTypography.labelMedium.copyWith(
+                color: foreground,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

@@ -19,6 +19,7 @@ abstract class CacheKeys {
   static const String vocabularySync = 'vocabulary_sync_cursor';
   static const String memoryStatesSync = 'memory_states_sync_cursor';
   static const String reviewSessionProgress = 'review_session_progress';
+  static const String pendingMemoryStates = 'pending_memory_states';
 
   /// ID of the user the cached data belongs to.
   static const String owner = 'cache_owner_id';
@@ -32,6 +33,7 @@ abstract class CacheKeys {
     vocabularySync,
     memoryStatesSync,
     reviewSessionProgress,
+    pendingMemoryStates,
   ];
 }
 
@@ -355,14 +357,11 @@ class CacheService {
   SyncCursor? getMemoryStatesSyncCursor() =>
       _readCursor(CacheKeys.memoryStatesSync);
 
-  /// Forces the next memory-state sync to download everything. Used when a
-  /// local change could not be saved: the cache no longer mirrors the server
-  /// and a delta would never correct it.
-  Future<void> invalidateMemoryStatesSync() =>
-      _prefs.remove(CacheKeys.memoryStatesSync);
+  List<MemoryState>? getCachedMemoryStates() =>
+      _readMemoryStates(CacheKeys.memoryStates);
 
-  List<MemoryState>? getCachedMemoryStates() {
-    final jsonStr = _prefs.getString(CacheKeys.memoryStates);
+  List<MemoryState>? _readMemoryStates(String key) {
+    final jsonStr = _prefs.getString(key);
     if (jsonStr == null) return null;
     try {
       final jsonList = jsonDecode(jsonStr) as List<dynamic>;
@@ -373,6 +372,41 @@ class CacheService {
       return null;
     }
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Pending Memory States (reviews not saved to the server yet)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Reviewed states whose save failed (offline, server error), at most one
+  /// per word. They are saved by the next memory-state sync and shown
+  /// instead of the server's copy until then, so the progress is not lost.
+  List<MemoryState> getPendingMemoryStates() =>
+      _readMemoryStates(CacheKeys.pendingMemoryStates) ?? const [];
+
+  /// Queues [state], replacing an older pending review of the same word.
+  Future<void> addPendingMemoryState(MemoryState state) => _writePending([
+        for (final s in getPendingMemoryStates())
+          if (s.vocabularyId != state.vocabularyId) s,
+        state,
+      ]);
+
+  /// Removes [settled] entries; a newer review of the same word queued in
+  /// the meantime stays.
+  Future<void> removePendingMemoryStates(Iterable<MemoryState> settled) {
+    if (settled.isEmpty) return Future.value();
+    final done = settled.toSet();
+    return _writePending([
+      for (final s in getPendingMemoryStates())
+        if (!done.contains(s)) s,
+    ]);
+  }
+
+  Future<void> _writePending(List<MemoryState> states) => states.isEmpty
+      ? _prefs.remove(CacheKeys.pendingMemoryStates)
+      : _prefs.setString(
+          CacheKeys.pendingMemoryStates,
+          jsonEncode([for (final s in states) s.toJson()]),
+        );
 
   // ─────────────────────────────────────────────────────────────────────────
   // Deck Cache

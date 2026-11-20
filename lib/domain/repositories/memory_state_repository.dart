@@ -24,4 +24,10 @@ abstract interface class MemoryStateRepository {
   Future<List<MemoryState>> createBatch({required List<String> vocabularyIds});
 
   Future<MemoryState> update(MemoryState state);
+
+  /// Saves a review that could not be saved when it happened, unless the
+  /// server already holds that review or a newer one (`last_reviewed_at`),
+  /// e.g. from another device. Returns null when nothing was written (also
+  /// when the row no longer exists).
+  Future<MemoryState?> updateIfNewer(MemoryState state);
 }

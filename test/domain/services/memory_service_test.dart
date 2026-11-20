@@ -8,6 +8,8 @@ MemoryState _state({
   int interval = 1,
   double ef = 2.5,
   double strength = 0.0,
+  int reviewCount = 0,
+  DateTime? nextReviewAt,
 }) {
   final now = DateTime.now().toUtc();
   return MemoryState(
@@ -17,8 +19,8 @@ MemoryState _state({
     stage: 4,
     memoryStrength: strength,
     recallProbability: strength,
-    nextReviewAt: now,
-    reviewCount: 0,
+    nextReviewAt: nextReviewAt ?? now,
+    reviewCount: reviewCount,
     correctCount: 0,
     incorrectCount: 0,
     consecutiveCorrect: 0,
@@ -200,13 +202,16 @@ void main() {
       expect(result.stage, 4);
     });
 
-    test('each recall moves a new word up one label', () {
-      // Perfect answers from a fresh word: critical → weak → good → strong.
-      var state = _state();
+    test('each on-schedule recall moves a new word up one label', () {
+      // Perfect answers from a fresh word, each on its due date:
+      // critical → weak → good → good → strong.
+      var now = DateTime.utc(2026, 1, 1);
+      var state = _state(nextReviewAt: now);
       final stages = <int>[];
       for (var i = 0; i < 4; i++) {
-        state = sut.applySmTwo(state, 1.0);
+        state = sut.applySmTwo(state, 1.0, now: now);
         stages.add(state.stage);
+        now = state.nextReviewAt;
       }
       expect(stages, [3, 2, 2, 1]);
     });
@@ -231,6 +236,60 @@ void main() {
     test('next review is scheduled in the future', () {
       final result = sut.applySmTwo(_state(), 0.8);
       expect(result.nextReviewAt.isAfter(DateTime.now().toUtc()), isTrue);
+    });
+
+    test('next review is the interval after [now]', () {
+      final now = DateTime.utc(2026, 11, 20, 9);
+      final result = sut.applySmTwo(
+        _state(repetitions: 1, nextReviewAt: now),
+        0.8,
+        now: now,
+      );
+      expect(result.lastReviewedAt, now);
+      expect(result.nextReviewAt, now.add(const Duration(days: 6)));
+    });
+
+    // -- Early review (before the due date) -----------------------------------
+    group('before the due date', () {
+      final now = DateTime.utc(2026, 11, 20, 9);
+      final notDue = _state(
+        repetitions: 2,
+        interval: 6,
+        reviewCount: 2,
+        nextReviewAt: now.add(const Duration(days: 3)),
+      );
+
+      test('a correct answer leaves the schedule unchanged', () {
+        final result = sut.applySmTwo(notDue, 1.0, now: now);
+        expect(result.sm2Interval, 6);
+        expect(result.sm2Repetitions, 2);
+        expect(result.easeFactor, 2.5);
+        expect(result.nextReviewAt, notDue.nextReviewAt);
+      });
+
+      test('a correct answer is still counted', () {
+        final result = sut.applySmTwo(notDue, 1.0, now: now);
+        expect(result.reviewCount, 3);
+        expect(result.correctCount, 1);
+        expect(result.lastReviewedAt, now);
+      });
+
+      test('a wrong answer still resets the word', () {
+        final result = sut.applySmTwo(notDue, 0.2, now: now);
+        expect(result.sm2Interval, 1);
+        expect(result.sm2Repetitions, 0);
+        expect(result.incorrectCount, 1);
+      });
+
+      test('repeated same-day sessions cannot make a word strong', () {
+        var state = _state(nextReviewAt: now);
+        for (var i = 0; i < 10; i++) {
+          state = sut.applySmTwo(state, 1.0, now: now);
+        }
+        expect(state.sm2Interval, 1);
+        // Still the first-recall label: weak.
+        expect(sut.stageFromStrength(sut.currentStrength(state, now)), 3);
+      });
     });
   });
 
@@ -268,6 +327,61 @@ void main() {
 
     test('a zero interval with a streak is treated as one day', () {
       expect(s(1, 0), 0.30);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // currentStrength
+  // ---------------------------------------------------------------------------
+  group('currentStrength', () {
+    final now = DateTime.utc(2026, 11, 20, 9);
+
+    test('0 for a word never reviewed', () {
+      expect(sut.currentStrength(_state(nextReviewAt: now), now), 0.0);
+    });
+
+    test('0 right after a miss', () {
+      final missed = sut.applySmTwo(
+        _state(repetitions: 3, interval: 30, nextReviewAt: now),
+        0.0,
+        now: now,
+      );
+      expect(sut.currentStrength(missed, now), 0.0);
+    });
+
+    test('the scheduled strength until the word is due', () {
+      final state = _state(
+        repetitions: 3,
+        interval: 30,
+        nextReviewAt: now.add(const Duration(days: 1)),
+      );
+      expect(
+        sut.currentStrength(state, now),
+        sut.strengthFor(repetitions: 3, intervalDays: 30),
+      );
+    });
+
+    test('decays once overdue: ×0.9 per interval', () {
+      final state = _state(repetitions: 3, interval: 30, nextReviewAt: now);
+      final scheduled = sut.strengthFor(repetitions: 3, intervalDays: 30);
+      expect(
+        sut.currentStrength(state, now.add(const Duration(days: 30))),
+        closeTo(scheduled * 0.9, 1e-9),
+      );
+      expect(
+        sut.currentStrength(state, now.add(const Duration(days: 300))),
+        closeTo(scheduled * 0.3487, 1e-4),
+      );
+    });
+
+    test('a long-neglected strong word is no longer strong', () {
+      final state = _state(repetitions: 5, interval: 45, nextReviewAt: now);
+      expect(sut.stageFromStrength(sut.currentStrength(state, now)), 1);
+      final later = now.add(const Duration(days: 200));
+      expect(
+        sut.stageFromStrength(sut.currentStrength(state, later)),
+        greaterThan(1),
+      );
     });
   });
 }

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:unebb/core/exceptions/app_exceptions.dart';
 import 'package:unebb/core/providers/build_generation.dart';
+import 'package:unebb/core/providers/clock_provider.dart';
 import 'package:unebb/core/services/cache_service.dart';
 import 'package:unebb/core/utils/logger.dart';
 import 'package:unebb/data/repositories/providers.dart';
@@ -156,11 +157,18 @@ final deckVocabularyProvider = Provider.autoDispose
 });
 
 /// Number of words due for review, optionally limited to one deck.
-/// `null` while the data needed to compute it is loading.
+/// `null` while the data needed to compute it is loading. Follows
+/// [clockProvider], so words becoming due while the app is open are counted.
 final dueCountProvider =
     Provider.autoDispose.family<int?, String?>((ref, deckId) {
   final words = ref.watch(vocabularyNotifierProvider).valueOrNull;
   final memory = ref.watch(memoryStatesMapNotifierProvider).valueOrNull;
+  final now = ref.watch(clockProvider);
   if (words == null || memory == null) return null;
-  return DeckOverview.dueCount(words: words, memory: memory, deckId: deckId);
+  return DeckOverview.dueCount(
+    words: words,
+    memory: memory,
+    deckId: deckId,
+    now: now,
+  );
 });

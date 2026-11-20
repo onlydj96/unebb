@@ -159,6 +159,46 @@ void main() {
     });
   });
 
+  group('pending memory states', () {
+    final reviewed = DateTime.utc(2026, 11, 20, 9);
+
+    test('keep the newest review per word', () async {
+      final cache = CacheService(prefs);
+      await cache.addPendingMemoryState(
+          memory('a', reviewCount: 1, lastReviewedAt: reviewed));
+      await cache.addPendingMemoryState(memory('b', reviewCount: 1));
+      await cache.addPendingMemoryState(memory('a', reviewCount: 2));
+
+      final pending = CacheService(prefs).getPendingMemoryStates();
+      expect(pending.map((s) => (s.vocabularyId, s.reviewCount)),
+          unorderedEquals([('a', 2), ('b', 1)]));
+    });
+
+    test('removing settled entries keeps a newer review of the same word',
+        () async {
+      final cache = CacheService(prefs);
+      await cache.addPendingMemoryState(memory('a', reviewCount: 1));
+      await cache.addPendingMemoryState(memory('b', reviewCount: 1));
+      final settled = cache.getPendingMemoryStates();
+      await cache.addPendingMemoryState(memory('a', reviewCount: 2));
+
+      await cache.removePendingMemoryStates(settled);
+
+      final pending = cache.getPendingMemoryStates();
+      expect(pending.single.vocabularyId, 'a');
+      expect(pending.single.reviewCount, 2);
+    });
+
+    test('are dropped when another user signs in', () async {
+      final cache = CacheService(prefs)..bindToUser('user-a');
+      await cache.addPendingMemoryState(memory('a', userId: 'user-a'));
+
+      final next = CacheService(prefs)..bindToUser('user-b');
+
+      expect(next.getPendingMemoryStates(), isEmpty);
+    });
+  });
+
   group('ReviewSessionProgress', () {
     test('round-trips through JSON including earlier progress', () {
       final progress = ReviewSessionProgress(

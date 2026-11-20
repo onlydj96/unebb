@@ -1008,8 +1008,14 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     final session = state.session;
     if (memState == null || session == null) return;
 
-    final updated =
-        _ref.read(memoryServiceProvider).applySmTwo(memState, score);
+    final memoryService = _ref.read(memoryServiceProvider);
+    final reviewedAt = DateTime.now().toUtc();
+    final updated = memoryService.applySmTwo(memState, score, now: reviewedAt);
+    // What the learner sees elsewhere: the decayed strength before, the
+    // fresh one after.
+    final previousStrength =
+        memoryService.currentStrength(memState, reviewedAt);
+    final updatedStrength = memoryService.currentStrength(updated, reviewedAt);
     _gradedIds.add(item.id);
 
     var next = state.copyWith(
@@ -1017,8 +1023,8 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     );
     if (_isCurrent(index)) {
       next = next.copyWith(
-        previousStrength: memState.memoryStrength,
-        updatedStrength: updated.memoryStrength,
+        previousStrength: previousStrength,
+        updatedStrength: updatedStrength,
         currentGraded: true,
       );
       if (onGraded != null) next = onGraded(next);
@@ -1042,21 +1048,27 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
         questionType: questionType,
         questionContext: questionContext,
         aiEvaluation: evaluation,
-        previousMemoryStrength: memState.memoryStrength,
-        updatedMemoryStrength: updated.memoryStrength,
-        reviewedAt: DateTime.now().toUtc(),
+        previousMemoryStrength: previousStrength,
+        updatedMemoryStrength: updatedStrength,
+        reviewedAt: reviewedAt,
       )),
     ]);
   }
 
   Future<void> _persistMemoryState(MemoryState updated) async {
+    // Read before awaiting: the screen may close while the request runs.
+    final repository = _ref.read(memoryStateRepositoryProvider);
+    final cacheService = _ref.read(cacheServiceProvider);
     try {
-      await _ref.read(memoryStateRepositoryProvider).update(updated);
+      await repository.update(updated);
     } catch (e, st) {
-      AppLogger.error('Failed to save memory state', error: e, stackTrace: st);
-      // The cached state now differs from the server's, which a delta sync
-      // would never correct: make the next sync download everything.
-      unawaited(_ref.read(cacheServiceProvider).invalidateMemoryStatesSync());
+      AppLogger.error(
+        'Failed to save memory state; queued for the next sync',
+        error: e,
+        stackTrace: st,
+      );
+      // The local map already shows the review; the next sync saves it.
+      await cacheService.addPendingMemoryState(updated);
     }
   }
 
