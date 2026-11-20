@@ -12,6 +12,7 @@ import 'package:unebb/core/theme/app_typography.dart';
 import 'package:unebb/core/utils/logger.dart';
 import 'package:unebb/data/repositories/providers.dart';
 import 'package:unebb/domain/models/deck.dart';
+import 'package:unebb/domain/models/memory_reading.dart';
 import 'package:unebb/domain/models/memory_state.dart';
 import 'package:unebb/features/auth/providers/profile_provider.dart';
 import 'package:unebb/features/auth/widgets/sign_out.dart';
@@ -55,15 +56,15 @@ class DashboardScreen extends ConsumerWidget {
     final name = ref.watch(profileProvider).valueOrNull?.displayName.trim();
     final memoryService = ref.watch(memoryServiceProvider);
     final now = ref.watch(clockProvider);
-    // Reviewed words per stage at the current time (decayed when overdue),
-    // index 0 = critical … 3 = strong.
-    final stageCounts = memoryMap == null ? null : List.filled(4, 0);
+    // Reviewed words per memory level at the current time (decayed when
+    // overdue).
+    final levelCounts = memoryMap == null
+        ? null
+        : {for (final level in MemoryLevel.values) level: 0};
     for (final s in memoryMap?.values ?? const <MemoryState>[]) {
       if (s.reviewCount == 0) continue;
-      final stage = memoryService.stageFromStrength(
-        memoryService.currentStrength(s, now),
-      );
-      stageCounts![4 - stage]++;
+      final level = memoryService.readingOf(s, now).level;
+      levelCounts![level] = levelCounts[level]! + 1;
     }
 
     return Scaffold(
@@ -132,16 +133,17 @@ class DashboardScreen extends ConsumerWidget {
                     child: _StatTile(
                       icon: Icons.workspace_premium_outlined,
                       iconColor: AppColors.successText,
-                      value: stageCounts?.last,
+                      value: levelCounts?[MemoryLevel.strong],
                       label: l10n.statMastered,
                     ),
                   ),
                 ],
               ),
             ),
-            if (stageCounts != null && stageCounts.any((c) => c > 0)) ...[
+            if (levelCounts != null &&
+                levelCounts.values.any((c) => c > 0)) ...[
               const SizedBox(height: 10),
-              _MemoryHealthCard(counts: stageCounts),
+              _MemoryHealthCard(counts: levelCounts),
             ],
             const SizedBox(height: AppSpacing.xl),
             _RecentDecks(decksAsync: decksAsync),
@@ -281,19 +283,20 @@ class _StatTile extends StatelessWidget {
   }
 }
 
-/// Reviewed words split by memory stage, ordered ebb → flow.
+/// Reviewed words split by memory level: words still being learnt, then
+/// ebb → flow.
 class _MemoryHealthCard extends StatelessWidget {
   const _MemoryHealthCard({required this.counts});
 
-  /// Words per stage, critical → strong.
-  final List<int> counts;
+  /// Words per level.
+  final Map<MemoryLevel, int> counts;
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    // Representative strengths for each stage, critical → strong.
-    const stageSamples = [0.0, 0.3, 0.6, 0.8];
-    final total = counts.fold(0, (sum, c) => sum + c);
+    // Learning, critical … strong.
+    const levels = MemoryLevel.values;
+    final total = counts.values.fold(0, (sum, c) => sum + c);
 
     return Card(
       child: Padding(
@@ -323,14 +326,14 @@ class _MemoryHealthCard extends StatelessWidget {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    for (var i = 0; i < counts.length; i++)
-                      if (counts[i] > 0) ...[
-                        if (counts.take(i).any((c) => c > 0))
+                    for (var i = 0; i < levels.length; i++)
+                      if (counts[levels[i]]! > 0) ...[
+                        if (levels.take(i).any((l) => counts[l]! > 0))
                           const SizedBox(width: 2),
                         Expanded(
-                          flex: counts[i],
+                          flex: counts[levels[i]]!,
                           child: ColoredBox(
-                            color: MemoryIndicator.colorFor(stageSamples[i]),
+                            color: MemoryIndicator.colorOf(levels[i]),
                           ),
                         ),
                       ],
@@ -343,22 +346,25 @@ class _MemoryHealthCard extends StatelessWidget {
               spacing: AppSpacing.md,
               runSpacing: AppSpacing.xs,
               children: [
-                for (var i = 0; i < counts.length; i++)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      StageDot(
-                        color: MemoryIndicator.colorFor(stageSamples[i]),
-                        size: 8,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '${MemoryIndicator.stageName(l10n, stageSamples[i])}'
-                        ' ${counts[i]}',
-                        style: AppTypography.labelMedium,
-                      ),
-                    ],
-                  ),
+                for (final level in levels)
+                  // "Learning" only when there is any: the four memory
+                  // levels always show.
+                  if (level != MemoryLevel.learning || counts[level]! > 0)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        StageDot(
+                          color: MemoryIndicator.colorOf(level),
+                          size: 8,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${MemoryIndicator.nameOf(l10n, level)}'
+                          ' ${counts[level]}',
+                          style: AppTypography.labelMedium,
+                        ),
+                      ],
+                    ),
               ],
             ),
           ],

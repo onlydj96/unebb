@@ -98,4 +98,7 @@ abstract final class AppColors {
   static const Color memoryMedium = lichen; // Stage 2
   static const Color memoryWeak = ochre; // Stage 3
   static const Color memoryCritical = crimson; // Stage 4
+
+  /// Reviewed but never recalled yet: neutral, outside the ebb → flow axis.
+  static const Color memoryLearning = textMuted;
 }

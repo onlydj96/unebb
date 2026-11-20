@@ -67,15 +67,56 @@ void main() {
   });
 
   test('struggling words are prioritised over well-known ones', () {
-    final weak =
-        memory('weak', reviewCount: 4, strength: 0.05, incorrectCount: 3);
-    final strong = memory('strong', reviewCount: 4, strength: 0.95);
+    // Recalled once, then missed three times.
+    final weak = memory('weak',
+        reviewCount: 4, correctCount: 1, incorrectCount: 3, repetitions: 0);
+    final strong = memory('strong',
+        reviewCount: 4,
+        repetitions: 4,
+        interval: 45,
+        nextReviewAt: now.add(const Duration(days: 20)));
 
     expect(
         sut.priorityScore(weak, now), lessThan(sut.priorityScore(strong, now)));
 
     final queue = sut.order([strong, weak], now: now, random: _ZeroRandom());
     expect(queue.first.vocabularyId, 'weak');
+  });
+
+  test('priority follows the strength the learner sees, not the stored one',
+      () {
+    // Stored strengths are stale on purpose: the first word was just missed,
+    // the second just recalled.
+    final missed = memory('missed',
+        reviewCount: 3,
+        strength: 0.85,
+        correctCount: 2,
+        incorrectCount: 1,
+        consecutiveCorrect: 0,
+        nextReviewAt: now.add(const Duration(days: 1)));
+    final recalled = memory('recalled',
+        reviewCount: 1,
+        repetitions: 1,
+        nextReviewAt: now.add(const Duration(days: 1)));
+
+    expect(sut.priorityScore(missed, now),
+        lessThan(sut.priorityScore(recalled, now)));
+  });
+
+  test('a word fading past its due day moves up', () {
+    final onTime = memory('on-time',
+        reviewCount: 4,
+        repetitions: 4,
+        interval: 45,
+        nextReviewAt: now.add(const Duration(days: 5)));
+    final fading = memory('fading',
+        reviewCount: 4,
+        repetitions: 4,
+        interval: 45,
+        nextReviewAt: now.subtract(const Duration(days: 60)));
+
+    expect(sut.priorityScore(fading, now),
+        lessThan(sut.priorityScore(onTime, now)));
   });
 
   test('empty input yields an empty queue', () {

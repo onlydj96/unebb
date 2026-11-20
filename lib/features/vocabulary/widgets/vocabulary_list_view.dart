@@ -87,9 +87,10 @@ class VocabularyListView extends ConsumerWidget {
               final memory = memoryMap[item.id];
               return VocabularyCard(
                 item: item,
-                memoryStrength: memory == null
+                // A word never reviewed has no memory to show yet.
+                memory: memory == null || memory.reviewCount == 0
                     ? null
-                    : memoryService.currentStrength(memory, now),
+                    : memoryService.readingOf(memory, now),
                 aiState: aiCardState(item, aiStatus[item.id]),
                 retryTooltip: l10n.generateExplanation,
                 onRetryAi: () =>

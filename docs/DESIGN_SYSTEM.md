@@ -67,7 +67,9 @@ Derived tokens (all in `lib/core/theme/app_colors.dart`):
 - `ochre` (`#D08A3C`) is the single hue added to the palette, for
   "needs attention" (warnings, weak memory); `ochreDeep` carries text
 - Memory stages run ebb → flow: critical `crimson` → weak `ochre` →
-  good `lichen` (`#A3B46B`) → strong `mint`
+  good `lichen` (`#A3B46B`) → strong `mint`. Words never recalled yet
+  ("learning") sit outside that axis in neutral `memoryLearning`
+  (= `textMuted`)
 
 Semantic tones (`AppTone`: neutral / success / warning / error) map to a
 soft background, a strong fill and a readable foreground. Use them for
@@ -128,6 +130,7 @@ memoryStrong
 memoryMedium
 memoryWeak
 memoryCritical
+memoryLearning
 ```
 
 Do not directly use hex values inside feature screens.

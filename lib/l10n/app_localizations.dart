@@ -656,6 +656,12 @@ abstract class AppLocalizations {
   /// **'Critical'**
   String get memoryCritical;
 
+  /// No description provided for @memoryLearning.
+  ///
+  /// In en, this message translates to:
+  /// **'Learning'**
+  String get memoryLearning;
+
   /// No description provided for @allCaughtUp.
   ///
   /// In en, this message translates to:

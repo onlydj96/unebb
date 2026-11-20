@@ -36,33 +36,58 @@ Pass/fail is decided by the meaning step alone. A recalled meaning is
 always a pass; the translation step only sets the SM-2 grade (3–5), i.e.
 how long the next interval is. See `ReviewNotifier._finalizeWord`.
 
-Display strength comes from the SM-2 streak and interval
-(`MemoryService.strengthFor`):
+### Scheduling (`MemoryService.applySmTwo`)
 
-```text
-sm2_repetitions = 0 → 0.0   (never recalled / last answer wrong)
-otherwise           → 0.30 + 0.70 × ln(interval) / ln(60), max 1.0
-```
+| Answer | Word | Effect |
+|---|---|---|
+| wrong | any | repetitions 0, interval 1 day. The ease factor drops only on a **lapse** (the word had been recalled); a miss while the word is still learnt (new, or last answer wrong) leaves it |
+| correct | still learning (repetitions 0) | first recall: repetitions 1, interval 1 day — even before its due day, so a word missed in the morning and recalled in the evening is learnt |
+| correct | due | repetitions + 1; interval 6 days after the first recall, then round(interval × EF) |
+| correct | recalled, not due yet | counted, schedule unchanged: repeated "review all" sessions on one day cannot push a word up |
 
-| Recall in a row | Interval | Strength | Stage |
+EF = max(1.3, EF + (0.1 − (5 − grade)(0.08 + (5 − grade) × 0.02))).
+
+Intervals count **learning days**: a word is due from 04:00 local time of
+its due day (`MemoryService.dueAfter`), so reviewing a little earlier than
+yesterday still finds it due, and a review just after midnight belongs to
+the evening before.
+
+### What the learner sees (`MemoryService.readingOf`)
+
+| Level | When | Strength |
+|---|---|---|
+| learning (학습 중) | reviewed, never recalled — nothing to forget yet | none (0) |
+| critical (위험) | recalled before, last answer wrong — or faded far past due | 0 – 0.30 |
+| weak (약함) | recalled, overdue and fading | 0.30 – 0.60 |
+| good (양호) | recalled, interval under 21 days, not long overdue | 0.60 – 0.80 |
+| strong (강함) | recalled, interval 21 days or more, not long overdue | 0.80 – 1.0 |
+
+A correct answer always leaves a word good or strong. Right after a recall
+the strength is `peakStrength(interval)` (log scale, so every recall moves
+it):
+
+| Recall on schedule | Interval | Strength | Level |
 |---|---|---|---|
-| 1 | 1 day | 0.30 | 3 (weak) |
-| 2 | 6 days | 0.61 | 2 (good) |
-| 3 | ~15 days | ~0.76 | 2 (good) |
-| 4 | ~40 days | ~0.93 | 1 (strong) |
+| 1 | 1 day | 0.70 | good |
+| 2 | 6 days | 0.76 | good |
+| 3 | ~15 days | 0.79 | good |
+| 4 | ~40 days | 0.85 | strong |
+| … | 1 year+ | 1.0 | strong |
 
-The table assumes each recall happens on its due date. A correct answer
-before `next_review_at` (e.g. in a "review all" session) is counted but
-leaves the schedule and strength unchanged, so repeated sessions on one
-day cannot push a word up; a wrong answer resets it as usual.
+21 days is the usual "mature" threshold of spaced repetition. The
+strength holds through the end of the due day (reviewing any time that
+day is on time), then decays along the forgetting curve SM-2 schedules
+by, R(t) = 0.9^(t / interval): ×0.9 per interval overdue, ×0.59 after
+five, ×0.35 after ten. A word recalled once becomes weak about two days
+after its due day and critical after about nine; a strong word takes
+months. The strength depends on the current time, so it is computed on
+the client (`clockProvider` ticks every minute) and never stored;
+`memory_strength` / `stage` hold the value right after the last review.
+Percentages are shown rounded down, so a word at 0.799 reads 79% (good),
+never 80%.
 
-What screens show is `MemoryService.currentStrength`: the strength above
-until the review is due, then decayed along the forgetting curve SM-2
-schedules by, R(t) = 0.9^(t / interval). An overdue word's strength is
-scaled by 0.9^(days overdue / interval): one interval overdue → ×0.9,
-five → ×0.59, ten → ×0.35. It depends on the current time, so it is
-computed on the client (`clockProvider` ticks every minute) and never
-stored; `memory_strength` holds the value right after the last review.
+The review queue orders reviewed words by this current strength (plus
+miss ratio and overdue days), not by the stored one.
 
 A review whose save fails (offline, server error) is kept in a local
 queue, shown in place of the server's copy, and saved by the next

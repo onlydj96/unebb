@@ -238,6 +238,32 @@ void main() {
       expect(_state(c).updatedStrength, _state(c).previousStrength);
     });
 
+    test('a correct answer after a miss earlier that day leaves "learning"',
+        () async {
+      final env = _Env(ids: ['a']);
+      // Missed this morning: due again tomorrow, so not due in this session.
+      env.memRepo.states[0] = memory('a',
+          reviewCount: 1,
+          incorrectCount: 1,
+          nextReviewAt: DateTime.now().toUtc().add(const Duration(hours: 20)));
+      final c = await env.container();
+      final n = _notifier(c);
+
+      await n.startSession(mode: 'all');
+      n.tapWord();
+      n.answerKnowWord();
+      await n.submitMeaning('meaning');
+      await n.submitTranslation('translation');
+      expect(_state(c).phase, ReviewPhase.showResult);
+
+      final saved = env.memRepo.updates.single;
+      expect(saved.sm2Repetitions, 1);
+      expect(saved.correctCount, 1);
+      expect(_state(c).previousStrength, 0.0);
+      // A correct answer shows at least "good".
+      expect(_state(c).updatedStrength, greaterThanOrEqualTo(0.6));
+    });
+
     test('a review that fails to save stays visible and is saved later',
         () async {
       final env = _Env(ids: ['a']);

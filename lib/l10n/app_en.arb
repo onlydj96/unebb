@@ -141,6 +141,7 @@
   "memoryGood": "Good",
   "memoryWeak": "Weak",
   "memoryCritical": "Critical",
+  "memoryLearning": "Learning",
   "allCaughtUp": "All caught up!",
   "noDueWords": "No words are due for review right now.\nCome back later or add new words.",
   "reviewAllInstead": "Review all words",

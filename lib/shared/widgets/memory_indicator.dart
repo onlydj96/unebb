@@ -4,42 +4,54 @@ import 'package:unebb/core/l10n/l10n.dart';
 import 'package:unebb/core/theme/app_colors.dart';
 import 'package:unebb/core/theme/app_radius.dart';
 import 'package:unebb/core/theme/app_typography.dart';
+import 'package:unebb/domain/models/memory_reading.dart';
 
-/// 메모리 강도(0.0–1.0)를 컬러 막대로 시각화하는 재사용 위젯.
+/// 단어의 기억 상태(레벨 + 강도 0.0–1.0)를 컬러 막대로 시각화하는 재사용 위젯.
 ///
-/// 색은 망각(crimson) → 회상(mint) 축을 따라 4단계로 변합니다.
-/// [showLabel] = true 이면 단계 이름과 퍼센트를 위에 표시합니다.
+/// 색은 망각(crimson) → 회상(mint) 축을 따라 변하고, 아직 한 번도 맞히지 못한
+/// 단어(학습 중)는 중립색입니다. [showLabel] = true 이면 레벨 이름과 퍼센트를
+/// 위에 표시합니다.
 class MemoryIndicator extends StatelessWidget {
   const MemoryIndicator({
     super.key,
-    required this.strength,
+    required this.reading,
     this.showLabel = false,
     this.height = 4.0,
   });
 
-  final double strength;
+  final MemoryReading reading;
   final bool showLabel;
   final double height;
 
-  /// Stage colour for [strength].
-  static Color colorFor(double strength) {
-    if (strength >= 0.80) return AppColors.memoryStrong;
-    if (strength >= 0.60) return AppColors.memoryMedium;
-    if (strength >= 0.30) return AppColors.memoryWeak;
-    return AppColors.memoryCritical;
-  }
+  /// Colour of [level].
+  static Color colorOf(MemoryLevel level) => switch (level) {
+        MemoryLevel.strong => AppColors.memoryStrong,
+        MemoryLevel.good => AppColors.memoryMedium,
+        MemoryLevel.weak => AppColors.memoryWeak,
+        MemoryLevel.critical => AppColors.memoryCritical,
+        MemoryLevel.learning => AppColors.memoryLearning,
+      };
 
-  /// Localised stage name for [strength].
-  static String stageName(AppLocalizations l10n, double strength) {
-    if (strength >= 0.80) return l10n.memoryStrong;
-    if (strength >= 0.60) return l10n.memoryGood;
-    if (strength >= 0.30) return l10n.memoryWeak;
-    return l10n.memoryCritical;
-  }
+  /// Localised name of [level].
+  static String nameOf(AppLocalizations l10n, MemoryLevel level) =>
+      switch (level) {
+        MemoryLevel.strong => l10n.memoryStrong,
+        MemoryLevel.good => l10n.memoryGood,
+        MemoryLevel.weak => l10n.memoryWeak,
+        MemoryLevel.critical => l10n.memoryCritical,
+        MemoryLevel.learning => l10n.memoryLearning,
+      };
+
+  /// Whole percent shown for [strength]. Rounded down, so a word just below
+  /// a level's lower bound never shows that bound (0.799 → 79%, good).
+  static int percentOf(double strength) =>
+      (strength.clamp(0.0, 1.0) * 100).floor();
 
   @override
   Widget build(BuildContext context) {
-    final color = colorFor(strength);
+    final level = reading.level;
+    final strength = reading.strength;
+    final color = colorOf(level);
     final reduceMotion =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
 
@@ -54,14 +66,16 @@ class MemoryIndicator extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  stageName(context.l10n, strength),
+                  nameOf(context.l10n, level),
                   style: AppTypography.labelLarge.copyWith(fontSize: 14),
                 ),
               ),
-              Text(
-                '${(strength * 100).round()}%',
-                style: AppTypography.labelMedium,
-              ),
+              // Nothing is remembered yet while learning.
+              if (level != MemoryLevel.learning)
+                Text(
+                  '${percentOf(strength)}%',
+                  style: AppTypography.labelMedium,
+                ),
             ],
           ),
           const SizedBox(height: 10),
@@ -118,7 +132,9 @@ class MemoryStrengthDelta extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final change = ((updated - previous) * 100).round();
+    final from = MemoryIndicator.percentOf(previous);
+    final to = MemoryIndicator.percentOf(updated);
+    final change = to - from;
     // Unchanged (e.g. a correct answer before the word was due): neutral.
     final (icon, foreground, background, deltaLabel) = switch (change.sign) {
       1 => (
@@ -153,7 +169,7 @@ class MemoryStrengthDelta extends StatelessWidget {
           Icon(icon, size: 18, color: foreground),
           const SizedBox(width: 8),
           Text(
-            '${(previous * 100).round()}% → ${(updated * 100).round()}%',
+            '$from% → $to%',
             style: AppTypography.labelMedium.copyWith(
               color: AppColors.textPrimary,
               fontWeight: FontWeight.w600,

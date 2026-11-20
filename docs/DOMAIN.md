@@ -79,3 +79,5 @@ Fields:
 
 Note: `stage` is NOT a field on AiEvaluation (DECISION-3). The LLM does not determine stage.
 Stage is always derived by `MemoryService.stageFromStrength(memoryStrength)` after the evaluation.
+What screens show is `MemoryService.readingOf(state, now)`: a `MemoryLevel` (learning, critical,
+weak, good, strong) and the current strength — see docs/MEMORY_MODEL.md.

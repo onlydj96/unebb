@@ -172,9 +172,9 @@ class _WordDetailBodyState extends ConsumerState<_WordDetailBody> {
               child: Padding(
                 padding: const EdgeInsets.all(AppSpacing.md),
                 child: MemoryIndicator(
-                  strength: ref
+                  reading: ref
                       .watch(memoryServiceProvider)
-                      .currentStrength(memory, ref.watch(clockProvider)),
+                      .readingOf(memory, ref.watch(clockProvider)),
                   showLabel: true,
                   height: 6,
                 ),

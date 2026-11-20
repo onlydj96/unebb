@@ -54,11 +54,16 @@ VocabularyItem vocab(
   );
 }
 
+/// A memory state. [correctCount] and [consecutiveCorrect] default to
+/// [repetitions] (a streak of on-schedule recalls); [repetitions] 0 with no
+/// correct answer is a word not learnt yet.
 MemoryState memory(
   String vocabularyId, {
   int reviewCount = 0,
   double strength = 0.0,
+  int? correctCount,
   int incorrectCount = 0,
+  int? consecutiveCorrect,
   int interval = 1,
   int repetitions = 0,
   DateTime? nextReviewAt,
@@ -78,9 +83,9 @@ MemoryState memory(
               const Duration(minutes: 1),
             ),
     reviewCount: reviewCount,
-    correctCount: 0,
+    correctCount: correctCount ?? repetitions,
     incorrectCount: incorrectCount,
-    consecutiveCorrect: 0,
+    consecutiveCorrect: consecutiveCorrect ?? repetitions,
     sm2Interval: interval,
     sm2Repetitions: repetitions,
     createdAt: _epoch,

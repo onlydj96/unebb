@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:unebb/domain/models/memory_state.dart';
+import 'package:unebb/domain/services/memory_service.dart';
 
 /// Pure domain service that decides which words a review session contains
 /// and in what order. No Flutter, no Supabase.
@@ -12,11 +13,12 @@ import 'package:unebb/domain/models/memory_state.dart';
 ///    (60% high / 30% medium / 10% low) so sessions stay varied while
 ///    struggling words surface early.
 class ReviewQueueBuilder {
-  const ReviewQueueBuilder();
+  const ReviewQueueBuilder({this.memory = const MemoryService()});
+
+  final MemoryService memory;
 
   /// Whether [state] is due at [now].
-  bool isDue(MemoryState state, DateTime now) =>
-      !state.nextReviewAt.isAfter(now);
+  bool isDue(MemoryState state, DateTime now) => memory.isDue(state, now);
 
   /// Selects the states to review for [mode] (`'due'` or `'all'`) and returns
   /// them in review order.
@@ -34,10 +36,10 @@ class ReviewQueueBuilder {
 
   /// Lower score = higher priority. Only meaningful for reviewed words.
   double priorityScore(MemoryState state, DateTime now) {
-    // Weak memory → low score → high priority. (The previous repository
-    // version used `1.0 - strength`, which sent the weakest words to the
-    // low-priority tier.)
-    var score = state.memoryStrength;
+    // Weak memory → low score → high priority. The strength the learner
+    // sees now: decayed when overdue, 0 for words missed or not learnt yet
+    // (the stored value is only the one right after the last review).
+    var score = memory.currentStrength(state, now);
 
     // Words the learner keeps getting wrong are pushed forward.
     if (state.incorrectCount > 0) {

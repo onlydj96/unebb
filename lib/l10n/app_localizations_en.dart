@@ -319,6 +319,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get memoryCritical => 'Critical';
 
   @override
+  String get memoryLearning => 'Learning';
+
+  @override
   String get allCaughtUp => 'All caught up!';
 
   @override

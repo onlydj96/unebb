@@ -234,6 +234,47 @@ tsc --strict (Edge Functions, Deno shim) → OK
 - `supabase functions deploy generate-explanation evaluate-answer generate-question`
 - Confirm the `evaluate-answer` model id (`gpt-5.6-luna`) exists for the account
 
+## Phase 17 — Memory model v2: honest memory levels (2026-11-20)
+
+The dashboard showed 338 of 390 reviewed words as "critical" (위험). Live
+data: 246 had never been recalled (mostly "I don't know" on first sight),
+78 were recalled once and merely due, 14 were real lapses.
+
+- [x] A correct answer always leaves a word good or strong:
+      `peakStrength(interval)` 1–21 days → 0.70–0.80 (good), 21 days–1 year
+      → 0.80–1.0 (strong). The old scale put a first recall at exactly 0.30,
+      the weak/critical boundary, so any decay made it critical the minute
+      it was due
+- [x] Strength holds through the due day, then decays ×0.9 per interval
+      overdue (good → weak → critical over days to months)
+- [x] New level **learning** (학습 중): reviewed but never recalled — not
+      counted as critical. `MemoryService.readingOf` → `MemoryReading`
+      (`MemoryLevel` + strength) drives the dashboard, word list and detail
+- [x] A correct answer after a miss is the first recall even before the
+      word is due again (used to stay critical until the next day)
+- [x] Misses before a word was ever recalled no longer lower the ease
+      factor (live data: never-recalled words had sunk to EF 1.30–1.96)
+- [x] Due dates are learning days (04:00 local), so reviewing earlier in
+      the day than last time still finds a word due
+- [x] Review queue priority uses the current (decayed) strength
+- [x] Never-reviewed words show no memory bar in word lists; percentages
+      round down so a level's bound shows only once reached
+- [x] Migration `20261120000001_memory_model_v2.sql`: 20 words whose
+      recalled meaning the pre-11-16 rule graded as a miss count as
+      recalled; EF 2.5 back for never-recalled words; stored
+      strength/stage on the new scale
+
+### Verification (2026-11-20)
+
+```
+dart format lib test   → OK
+flutter analyze        → No issues found
+flutter test           → 194/194 passed
+```
+
+The migration was dry-run read-only against the linked project (step 1:
+20 rows, step 2: 0, step 3: 227, step 4: 390).
+
 ## Phase 16 — Writing practice after a wrong answer (2026-11-15)
 
 After "I don't know" (explanation) and after a failed meaning answer, the

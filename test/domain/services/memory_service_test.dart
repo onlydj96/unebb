@@ -1,266 +1,301 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:unebb/domain/models/memory_reading.dart';
 import 'package:unebb/domain/models/memory_state.dart';
 import 'package:unebb/domain/services/memory_service.dart';
 
-// Helper to build a minimal MemoryState for testing.
+const _sut = MemoryService();
+
+/// A local time in November 2026 (learning days are local).
+DateTime _at(int day, [int hour = 12, int minute = 0]) =>
+    DateTime(2026, 11, day, hour, minute);
+
+/// [correctCount] and [consecutiveCorrect] default to [repetitions]: a
+/// streak of on-schedule recalls.
 MemoryState _state({
   int repetitions = 0,
   int interval = 1,
   double ef = 2.5,
-  double strength = 0.0,
   int reviewCount = 0,
-  DateTime? nextReviewAt,
+  int? correctCount,
+  int? consecutiveCorrect,
+  required DateTime nextReviewAt,
 }) {
-  final now = DateTime.now().toUtc();
+  final created = DateTime.utc(2026, 10, 1);
   return MemoryState(
     id: 'test-id',
     userId: 'user-id',
     vocabularyId: 'vocab-id',
     stage: 4,
-    memoryStrength: strength,
-    recallProbability: strength,
-    nextReviewAt: nextReviewAt ?? now,
+    memoryStrength: 0.0,
+    recallProbability: 0.0,
+    nextReviewAt: nextReviewAt.toUtc(),
     reviewCount: reviewCount,
-    correctCount: 0,
+    correctCount: correctCount ?? repetitions,
     incorrectCount: 0,
-    consecutiveCorrect: 0,
+    consecutiveCorrect: consecutiveCorrect ?? repetitions,
     easeFactor: ef,
     sm2Interval: interval,
     sm2Repetitions: repetitions,
-    createdAt: now,
-    updatedAt: now,
+    createdAt: created,
+    updatedAt: created,
   );
 }
 
+/// A word added at [at]: due at once.
+MemoryState _newWord(DateTime at) => _state(nextReviewAt: at);
+
+MemoryLevel _level(MemoryState state, DateTime now) =>
+    _sut.readingOf(state, now).level;
+
+const _goodOrStrong = [MemoryLevel.good, MemoryLevel.strong];
+
 void main() {
-  late MemoryService sut;
-
-  setUp(() => sut = const MemoryService());
-
   // ---------------------------------------------------------------------------
-  // isCorrectAnswer
+  // Grade & correctness
   // ---------------------------------------------------------------------------
   group('isCorrectAnswer', () {
-    test('returns true at threshold (0.6)', () {
-      expect(sut.isCorrectAnswer(0.6), isTrue);
+    test('true from the threshold (0.6) up', () {
+      expect(_sut.isCorrectAnswer(0.6), isTrue);
+      expect(_sut.isCorrectAnswer(1.0), isTrue);
     });
 
-    test('returns true above threshold', () {
-      expect(sut.isCorrectAnswer(0.9), isTrue);
-      expect(sut.isCorrectAnswer(1.0), isTrue);
-    });
-
-    test('returns false below threshold', () {
-      expect(sut.isCorrectAnswer(0.59), isFalse);
-      expect(sut.isCorrectAnswer(0.0), isFalse);
+    test('false below the threshold', () {
+      expect(_sut.isCorrectAnswer(0.59), isFalse);
+      expect(_sut.isCorrectAnswer(0.0), isFalse);
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // gradeFromScore
-  // ---------------------------------------------------------------------------
   group('gradeFromScore', () {
     test('score >= 0.90 → grade 5', () {
-      expect(sut.gradeFromScore(0.90), 5);
-      expect(sut.gradeFromScore(1.0), 5);
+      expect(_sut.gradeFromScore(0.90), 5);
+      expect(_sut.gradeFromScore(1.0), 5);
     });
 
     test('score >= 0.75 and < 0.90 → grade 4', () {
-      expect(sut.gradeFromScore(0.75), 4);
-      expect(sut.gradeFromScore(0.89), 4);
+      expect(_sut.gradeFromScore(0.75), 4);
+      expect(_sut.gradeFromScore(0.89), 4);
     });
 
     test('score >= 0.60 and < 0.75 → grade 3', () {
-      expect(sut.gradeFromScore(0.60), 3);
-      expect(sut.gradeFromScore(0.74), 3);
+      expect(_sut.gradeFromScore(0.60), 3);
+      expect(_sut.gradeFromScore(0.74), 3);
     });
 
     test('score < 0.60 → grade 1', () {
-      expect(sut.gradeFromScore(0.59), 1);
-      expect(sut.gradeFromScore(0.0), 1);
+      expect(_sut.gradeFromScore(0.59), 1);
+      expect(_sut.gradeFromScore(0.0), 1);
     });
   });
 
   // ---------------------------------------------------------------------------
-  // stageFromStrength
+  // Levels
   // ---------------------------------------------------------------------------
-  group('stageFromStrength', () {
-    test('Stage 1 at 0.80', () => expect(sut.stageFromStrength(0.80), 1));
-    test('Stage 1 at 1.0', () => expect(sut.stageFromStrength(1.0), 1));
-    test('Stage 2 at 0.60', () => expect(sut.stageFromStrength(0.60), 2));
-    test('Stage 2 at 0.79', () => expect(sut.stageFromStrength(0.79), 2));
-    test('Stage 3 at 0.30', () => expect(sut.stageFromStrength(0.30), 3));
-    test('Stage 3 at 0.59', () => expect(sut.stageFromStrength(0.59), 3));
-    test('Stage 4 at 0.29', () => expect(sut.stageFromStrength(0.29), 4));
-    test('Stage 4 at 0.0', () => expect(sut.stageFromStrength(0.0), 4));
-  });
-
-  // ---------------------------------------------------------------------------
-  // calculateNextReview (legacy)
-  // ---------------------------------------------------------------------------
-  group('calculateNextReview', () {
-    test('Stage 1 → 7 days', () {
-      final next = sut.calculateNextReview(1);
-      final diff = next.difference(DateTime.now().toUtc());
-      expect(diff.inHours, closeTo(7 * 24, 1));
+  group('levelForStrength', () {
+    test('a lower bound belongs to the level it starts', () {
+      expect(_sut.levelForStrength(1.0), MemoryLevel.strong);
+      expect(_sut.levelForStrength(0.80), MemoryLevel.strong);
+      expect(_sut.levelForStrength(0.7999), MemoryLevel.good);
+      expect(_sut.levelForStrength(0.60), MemoryLevel.good);
+      expect(_sut.levelForStrength(0.5999), MemoryLevel.weak);
+      expect(_sut.levelForStrength(0.30), MemoryLevel.weak);
+      expect(_sut.levelForStrength(0.2999), MemoryLevel.critical);
+      expect(_sut.levelForStrength(0.0), MemoryLevel.critical);
     });
 
-    test('Stage 2 → 3 days', () {
-      final next = sut.calculateNextReview(2);
-      final diff = next.difference(DateTime.now().toUtc());
-      expect(diff.inHours, closeTo(3 * 24, 1));
-    });
-
-    test('Stage 3 → 1 day', () {
-      final next = sut.calculateNextReview(3);
-      final diff = next.difference(DateTime.now().toUtc());
-      expect(diff.inHours, closeTo(24, 1));
-    });
-
-    test('Stage 4 → 10 minutes', () {
-      final next = sut.calculateNextReview(4);
-      final diff = next.difference(DateTime.now().toUtc());
-      expect(diff.inMinutes, closeTo(10, 1));
+    test('stored stage: 1 = strong … 4 = critical', () {
+      expect(_sut.stageFromStrength(0.9), 1);
+      expect(_sut.stageFromStrength(0.7), 2);
+      expect(_sut.stageFromStrength(0.4), 3);
+      expect(_sut.stageFromStrength(0.1), 4);
+      expect(MemoryLevel.learning.stage, 4);
     });
   });
 
   // ---------------------------------------------------------------------------
-  // applySmTwo — SM-2 algorithm
+  // Due dates
+  // ---------------------------------------------------------------------------
+  group('dueAfter', () {
+    test('is the start of a later learning day', () {
+      expect(_sut.dueAfter(_at(20, 21), 1), _at(21, 4).toUtc());
+      expect(_sut.dueAfter(_at(20, 9), 6), _at(26, 4).toUtc());
+    });
+
+    test('a review after midnight belongs to the evening before', () {
+      expect(_sut.dueAfter(_at(21, 2), 1), _at(21, 4).toUtc());
+      expect(_sut.dueAfter(_at(21, 4), 1), _at(22, 4).toUtc());
+    });
+
+    test('crosses month ends', () {
+      expect(_sut.dueAfter(_at(30), 1), DateTime(2026, 12, 1, 4).toUtc());
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // applySmTwo
   // ---------------------------------------------------------------------------
   group('applySmTwo', () {
-    // -- Interval progression -------------------------------------------------
-    test('first correct → interval=1, repetitions=1', () {
-      final result = sut.applySmTwo(_state(repetitions: 0), 0.8);
-      expect(result.sm2Repetitions, 1);
-      expect(result.sm2Interval, 1);
+    group('on schedule', () {
+      test('intervals grow 1 → 6 → round(6 × EF)', () {
+        var now = _at(1);
+        var state = _newWord(now);
+        final intervals = <int>[];
+        for (var i = 0; i < 3; i++) {
+          state = _sut.applySmTwo(state, 0.8, now: now); // grade 4: EF stays
+          intervals.add(state.sm2Interval);
+          now = state.nextReviewAt.add(const Duration(hours: 8));
+        }
+        expect(intervals, [1, 6, 15]);
+        expect(state.sm2Repetitions, 3);
+        expect(state.easeFactor, 2.5);
+      });
+
+      test('the next review is due from the start of its learning day', () {
+        final now = _at(20, 21);
+        final result = _sut.applySmTwo(
+          _state(repetitions: 1, reviewCount: 1, nextReviewAt: now),
+          0.8,
+          now: now,
+        );
+        expect(result.lastReviewedAt, now.toUtc());
+        expect(result.nextReviewAt, _at(26, 4).toUtc());
+      });
+
+      test('a review earlier in the day than the last one is on time', () {
+        final first =
+            _sut.applySmTwo(_newWord(_at(20, 21)), 1.0, now: _at(20, 21));
+        final second = _sut.applySmTwo(first, 1.0, now: _at(21, 8));
+        expect(second.sm2Repetitions, 2);
+        expect(second.sm2Interval, 6);
+      });
+
+      test('a perfect recall raises the ease factor, a laboured one lowers it',
+          () {
+        final now = _at(20);
+        expect(_sut.applySmTwo(_newWord(now), 1.0, now: now).easeFactor,
+            greaterThan(2.5));
+        expect(_sut.applySmTwo(_newWord(now), 0.6, now: now).easeFactor,
+            lessThan(2.5));
+      });
+
+      test('stores the strength and stage the learner sees right after', () {
+        final now = _at(20);
+        final result = _sut.applySmTwo(_newWord(now), 0.9, now: now);
+        final reading = _sut.readingOf(result, now);
+        expect(result.memoryStrength, reading.strength);
+        expect(result.recallProbability, reading.strength);
+        expect(result.stage, reading.level.stage);
+      });
     });
 
-    test('second correct → interval=6, repetitions=2', () {
-      final result = sut.applySmTwo(_state(repetitions: 1, interval: 1), 0.8);
-      expect(result.sm2Repetitions, 2);
-      expect(result.sm2Interval, 6);
+    group('wrong answers', () {
+      final now = _at(20);
+
+      test('reset the streak; the word is due again the next day', () {
+        final result = _sut.applySmTwo(
+          _state(
+              repetitions: 3, interval: 15, reviewCount: 3, nextReviewAt: now),
+          0.3,
+          now: now,
+        );
+        expect(result.sm2Repetitions, 0);
+        expect(result.sm2Interval, 1);
+        expect(result.consecutiveCorrect, 0);
+        expect(result.incorrectCount, 1);
+        expect(result.nextReviewAt, _at(21, 4).toUtc());
+      });
+
+      test('a lapse lowers the ease factor, never below 1.3', () {
+        final lapsed = _sut.applySmTwo(
+          _state(
+              repetitions: 3, interval: 15, reviewCount: 3, nextReviewAt: now),
+          0.0,
+          now: now,
+        );
+        expect(lapsed.easeFactor, closeTo(1.96, 1e-9));
+
+        final floored = _sut.applySmTwo(
+          _state(
+              repetitions: 2,
+              interval: 6,
+              ef: 1.4,
+              reviewCount: 2,
+              nextReviewAt: now),
+          0.0,
+          now: now,
+        );
+        expect(floored.easeFactor, 1.3);
+      });
+
+      test('missing a word not learnt yet leaves the ease factor', () {
+        // "I don't know" on first sight, three days running.
+        var state = _newWord(_at(1));
+        for (var day = 1; day <= 3; day++) {
+          state = _sut.applySmTwo(state, 0.0, now: _at(day));
+        }
+        expect(state.easeFactor, 2.5);
+        expect(state.incorrectCount, 3);
+        expect(state.correctCount, 0);
+      });
+
+      test('a wrong answer before the due day still resets the word', () {
+        final result = _sut.applySmTwo(
+          _state(
+              repetitions: 2,
+              interval: 6,
+              reviewCount: 2,
+              nextReviewAt: _at(23, 4)),
+          0.2,
+          now: now,
+        );
+        expect(result.sm2Repetitions, 0);
+        expect(result.sm2Interval, 1);
+      });
     });
 
-    test('third correct → interval = round(prev * EF)', () {
-      final result = sut.applySmTwo(
-        _state(repetitions: 2, interval: 6, ef: 2.5),
-        0.8,
-      );
-      expect(result.sm2Interval, (6 * 2.5).round());
-      expect(result.sm2Repetitions, 3);
+    group('a correct answer after a miss', () {
+      test('is the first recall, even before the word is due again', () {
+        final missed =
+            _sut.applySmTwo(_newWord(_at(20, 9)), 0.0, now: _at(20, 9));
+        expect(_level(missed, _at(20, 9)), MemoryLevel.learning);
+
+        final recalled = _sut.applySmTwo(missed, 0.9, now: _at(20, 18));
+        expect(recalled.sm2Repetitions, 1);
+        expect(recalled.sm2Interval, 1);
+        expect(recalled.nextReviewAt, _at(21, 4).toUtc());
+        expect(_level(recalled, _at(20, 18)), MemoryLevel.good);
+      });
+
+      test('relearns a forgotten word the same way', () {
+        final lapsed = _sut.applySmTwo(
+          _state(
+              repetitions: 4,
+              interval: 40,
+              reviewCount: 4,
+              nextReviewAt: _at(20, 9)),
+          0.0,
+          now: _at(20, 9),
+        );
+        expect(_level(lapsed, _at(20, 9)), MemoryLevel.critical);
+
+        final relearnt = _sut.applySmTwo(lapsed, 0.9, now: _at(20, 18));
+        expect(relearnt.sm2Repetitions, 1);
+        expect(_level(relearnt, _at(20, 18)), MemoryLevel.good);
+      });
     });
 
-    // -- Failure resets -------------------------------------------------------
-    test('incorrect answer resets repetitions to 0 and interval to 1', () {
-      final result = sut.applySmTwo(
-        _state(repetitions: 3, interval: 15, ef: 2.5),
-        0.3, // score < 0.6 → grade 1
-      );
-      expect(result.sm2Repetitions, 0);
-      expect(result.sm2Interval, 1);
-    });
-
-    // -- Ease factor ----------------------------------------------------------
-    test('perfect score (1.0) increases ease factor', () {
-      final before = _state(ef: 2.5);
-      final result = sut.applySmTwo(before, 1.0);
-      expect(result.easeFactor, greaterThan(2.5));
-    });
-
-    test('low-pass score (0.6) slightly decreases ease factor', () {
-      final before = _state(ef: 2.5);
-      final result = sut.applySmTwo(before, 0.6);
-      expect(result.easeFactor, lessThan(2.5));
-    });
-
-    test('ease factor never goes below 1.3', () {
-      var state = _state(ef: 1.3);
-      // Apply several fails
-      for (int i = 0; i < 5; i++) {
-        state = sut.applySmTwo(state, 0.0);
-      }
-      expect(state.easeFactor, greaterThanOrEqualTo(1.3));
-    });
-
-    // -- Strength & next review -----------------------------------------------
-    test('correct answer increases memory strength', () {
-      // repetitions=2, interval=6 → after correct: interval=round(6*2.5)=15
-      final result = sut.applySmTwo(
-        _state(repetitions: 2, interval: 6, strength: 0.61),
-        0.8,
-      );
-      expect(result.memoryStrength, greaterThan(0.61));
-    });
-
-    test('incorrect answer resets the streak so strength drops to critical',
-        () {
-      final result = sut.applySmTwo(
-        _state(repetitions: 3, interval: 30, strength: 0.9),
-        0.3,
-      );
-      expect(result.memoryStrength, 0.0);
-      expect(result.stage, 4);
-    });
-
-    test('each on-schedule recall moves a new word up one label', () {
-      // Perfect answers from a fresh word, each on its due date:
-      // critical → weak → good → good → strong.
-      var now = DateTime.utc(2026, 1, 1);
-      var state = _state(nextReviewAt: now);
-      final stages = <int>[];
-      for (var i = 0; i < 4; i++) {
-        state = sut.applySmTwo(state, 1.0, now: now);
-        stages.add(state.stage);
-        now = state.nextReviewAt;
-      }
-      expect(stages, [3, 2, 2, 1]);
-    });
-
-    test('the lowest passing grade still leaves critical on the first recall',
-        () {
-      final result = sut.applySmTwo(_state(), 0.6);
-      expect(result.stage, 3);
-    });
-
-    test('strength always in [0.0, 1.0]', () {
-      final veryHighInterval = sut.applySmTwo(
-        _state(repetitions: 10, interval: 200, ef: 2.5),
-        1.0,
-      );
-      expect(veryHighInterval.memoryStrength, lessThanOrEqualTo(1.0));
-
-      final fail = sut.applySmTwo(_state(strength: 0.0), 0.0);
-      expect(fail.memoryStrength, greaterThanOrEqualTo(0.0));
-    });
-
-    test('next review is scheduled in the future', () {
-      final result = sut.applySmTwo(_state(), 0.8);
-      expect(result.nextReviewAt.isAfter(DateTime.now().toUtc()), isTrue);
-    });
-
-    test('next review is the interval after [now]', () {
-      final now = DateTime.utc(2026, 11, 20, 9);
-      final result = sut.applySmTwo(
-        _state(repetitions: 1, nextReviewAt: now),
-        0.8,
-        now: now,
-      );
-      expect(result.lastReviewedAt, now);
-      expect(result.nextReviewAt, now.add(const Duration(days: 6)));
-    });
-
-    // -- Early review (before the due date) -----------------------------------
-    group('before the due date', () {
-      final now = DateTime.utc(2026, 11, 20, 9);
+    group('before the due day', () {
+      final now = _at(20);
       final notDue = _state(
         repetitions: 2,
         interval: 6,
         reviewCount: 2,
-        nextReviewAt: now.add(const Duration(days: 3)),
+        nextReviewAt: _at(23, 4),
       );
 
       test('a correct answer leaves the schedule unchanged', () {
-        final result = sut.applySmTwo(notDue, 1.0, now: now);
+        final result = _sut.applySmTwo(notDue, 1.0, now: now);
         expect(result.sm2Interval, 6);
         expect(result.sm2Repetitions, 2);
         expect(result.easeFactor, 2.5);
@@ -268,120 +303,210 @@ void main() {
       });
 
       test('a correct answer is still counted', () {
-        final result = sut.applySmTwo(notDue, 1.0, now: now);
+        final result = _sut.applySmTwo(notDue, 1.0, now: now);
         expect(result.reviewCount, 3);
-        expect(result.correctCount, 1);
-        expect(result.lastReviewedAt, now);
+        expect(result.correctCount, 3);
+        expect(result.consecutiveCorrect, 3);
+        expect(result.lastReviewedAt, now.toUtc());
       });
 
-      test('a wrong answer still resets the word', () {
-        final result = sut.applySmTwo(notDue, 0.2, now: now);
-        expect(result.sm2Interval, 1);
-        expect(result.sm2Repetitions, 0);
-        expect(result.incorrectCount, 1);
-      });
-
-      test('repeated same-day sessions cannot make a word strong', () {
-        var state = _state(nextReviewAt: now);
+      test('repeated same-day sessions cannot push a word past one recall', () {
+        var state = _newWord(now);
         for (var i = 0; i < 10; i++) {
-          state = sut.applySmTwo(state, 1.0, now: now);
+          state = _sut.applySmTwo(state, 1.0, now: now.add(Duration(hours: i)));
         }
+        expect(state.sm2Repetitions, 1);
         expect(state.sm2Interval, 1);
-        // Still the first-recall label: weak.
-        expect(sut.stageFromStrength(sut.currentStrength(state, now)), 3);
+        expect(state.correctCount, 10);
+        expect(_level(state, _at(20, 21)), MemoryLevel.good);
       });
     });
   });
 
   // ---------------------------------------------------------------------------
-  // strengthFor
+  // peakStrength
   // ---------------------------------------------------------------------------
-  group('strengthFor', () {
-    double s(int repetitions, int interval) =>
-        sut.strengthFor(repetitions: repetitions, intervalDays: interval);
-
-    test('no streak → 0.0 whatever the interval', () {
-      expect(s(0, 1), 0.0);
-      expect(s(0, 30), 0.0);
+  group('peakStrength', () {
+    test('a first recall (1 day) is 0.70, good', () {
+      expect(_sut.peakStrength(1), closeTo(0.70, 1e-9));
     });
 
-    test('first recall (1 day) → exactly 0.30, weak', () {
-      expect(s(1, 1), 0.30);
-      expect(sut.stageFromStrength(s(1, 1)), 3);
+    test('intervals under 21 days are good', () {
+      for (final days in [1, 6, 15, 20]) {
+        expect(_sut.levelForStrength(_sut.peakStrength(days)), MemoryLevel.good,
+            reason: '$days days');
+      }
     });
 
-    test('second recall (6 days) → good', () {
-      expect(s(2, 6), closeTo(0.606, 0.001));
-      expect(sut.stageFromStrength(s(2, 6)), 2);
+    test('21 days and more are strong', () {
+      for (final days in [21, 45, 120, 365]) {
+        expect(
+            _sut.levelForStrength(_sut.peakStrength(days)), MemoryLevel.strong,
+            reason: '$days days');
+      }
     });
 
-    test('interval 60 → 1.0, longer intervals capped', () {
-      expect(s(5, 60), closeTo(1.0, 0.001));
-      expect(s(6, 200), 1.0);
+    test('grows with the interval and reaches 1.0 at a year', () {
+      final values = [
+        for (final days in [1, 6, 15, 20, 21, 45, 120, 365, 1000])
+          _sut.peakStrength(days),
+      ];
+      for (var i = 1; i < values.length; i++) {
+        expect(values[i], greaterThanOrEqualTo(values[i - 1]));
+      }
+      expect(_sut.peakStrength(365), closeTo(1.0, 1e-9));
+      expect(_sut.peakStrength(1000), 1.0);
     });
 
-    test('grows with the interval', () {
-      expect(s(3, 15), greaterThan(s(2, 6)));
-      expect(s(4, 40), greaterThan(s(3, 15)));
-    });
-
-    test('a zero interval with a streak is treated as one day', () {
-      expect(s(1, 0), 0.30);
+    test('an interval under one day counts as one day', () {
+      expect(_sut.peakStrength(0), _sut.peakStrength(1));
     });
   });
 
   // ---------------------------------------------------------------------------
-  // currentStrength
+  // readingOf / currentStrength
   // ---------------------------------------------------------------------------
-  group('currentStrength', () {
-    final now = DateTime.utc(2026, 11, 20, 9);
+  group('readingOf', () {
+    final now = _at(20);
 
-    test('0 for a word never reviewed', () {
-      expect(sut.currentStrength(_state(nextReviewAt: now), now), 0.0);
+    test('a word not reviewed yet is learning', () {
+      expect(_sut.readingOf(_newWord(now), now),
+          const MemoryReading(MemoryLevel.learning, 0.0));
     });
 
-    test('0 right after a miss', () {
-      final missed = sut.applySmTwo(
-        _state(repetitions: 3, interval: 30, nextReviewAt: now),
-        0.0,
+    test('a word never recalled is learning, not critical', () {
+      var state = _newWord(_at(10));
+      for (var day = 10; day < 13; day++) {
+        state = _sut.applySmTwo(state, 0.0, now: _at(day));
+      }
+      expect(_level(state, now), MemoryLevel.learning);
+      expect(_sut.currentStrength(state, now), 0.0);
+    });
+
+    test('a recalled word that was then missed is critical', () {
+      final lapsed = _sut.applySmTwo(
+        _state(repetitions: 3, interval: 15, reviewCount: 3, nextReviewAt: now),
+        0.2,
         now: now,
       );
-      expect(sut.currentStrength(missed, now), 0.0);
+      expect(_sut.readingOf(lapsed, now),
+          const MemoryReading(MemoryLevel.critical, 0.0));
     });
 
-    test('the scheduled strength until the word is due', () {
-      final state = _state(
-        repetitions: 3,
-        interval: 30,
-        nextReviewAt: now.add(const Duration(days: 1)),
-      );
-      expect(
-        sut.currentStrength(state, now),
-        sut.strengthFor(repetitions: 3, intervalDays: 30),
-      );
+    test('every correct answer leaves the word good or strong', () {
+      final rng = Random(42);
+      for (var i = 0; i < 500; i++) {
+        final repetitions = rng.nextInt(7);
+        final streak = repetitions == 0 ? 0 : repetitions + rng.nextInt(3);
+        final state = _state(
+          repetitions: repetitions,
+          interval: repetitions == 0 ? 1 : 1 + rng.nextInt(400),
+          ef: 1.3 + rng.nextDouble() * 1.7,
+          correctCount: streak + rng.nextInt(4),
+          consecutiveCorrect: streak,
+          reviewCount: streak + 1 + rng.nextInt(4),
+          nextReviewAt:
+              now.add(Duration(hours: rng.nextInt(24 * 800) - 24 * 400)),
+        );
+        final score = 0.6 + rng.nextDouble() * 0.4;
+        final result = _sut.applySmTwo(state, score, now: now);
+        expect(_level(result, now), isIn(_goodOrStrong), reason: '$state');
+      }
     });
 
-    test('decays once overdue: ×0.9 per interval', () {
-      final state = _state(repetitions: 3, interval: 30, nextReviewAt: now);
-      final scheduled = sut.strengthFor(repetitions: 3, intervalDays: 30);
-      expect(
-        sut.currentStrength(state, now.add(const Duration(days: 30))),
-        closeTo(scheduled * 0.9, 1e-9),
-      );
-      expect(
-        sut.currentStrength(state, now.add(const Duration(days: 300))),
-        closeTo(scheduled * 0.3487, 1e-4),
-      );
+    group('over time', () {
+      // Recalled once on the 20th at 21:00: due from the 21st, 04:00.
+      final recalled =
+          _sut.applySmTwo(_newWord(_at(20, 21)), 0.9, now: _at(20, 21));
+
+      test('holds until the end of the due day', () {
+        for (final t in [
+          _at(21, 3),
+          _at(21, 4, 1), // just due: used to drop straight to critical
+          _at(21, 23, 59),
+          _at(22, 3, 59),
+        ]) {
+          expect(_sut.currentStrength(recalled, t), closeTo(0.70, 1e-9),
+              reason: '$t');
+        }
+      });
+
+      test('then fades: good → weak → critical', () {
+        expect(_level(recalled, _at(23, 4)), MemoryLevel.good); // ×0.9
+        expect(_level(recalled, _at(24, 4)), MemoryLevel.weak); // ×0.81
+        expect(_level(recalled, _at(29, 4)), MemoryLevel.weak);
+        expect(_level(recalled, _at(30, 12)), MemoryLevel.critical);
+      });
+
+      test('falls ×0.9 per interval past the due day', () {
+        final state = _state(
+            repetitions: 3, interval: 30, reviewCount: 3, nextReviewAt: _at(1));
+        final peak = _sut.peakStrength(30);
+        final dueDayEnd = state.nextReviewAt.add(const Duration(days: 1));
+        expect(
+          _sut.currentStrength(state, dueDayEnd.add(const Duration(days: 30))),
+          closeTo(peak * 0.9, 1e-9),
+        );
+        expect(
+          _sut.currentStrength(state, dueDayEnd.add(const Duration(days: 300))),
+          closeTo(peak * 0.3487, 1e-4),
+        );
+      });
+
+      test('a long-neglected strong word steps down one level at a time', () {
+        final state = _state(
+            repetitions: 5, interval: 45, reviewCount: 5, nextReviewAt: _at(1));
+        final seen = <MemoryLevel>[];
+        for (var day = 0; day <= 600; day += 5) {
+          final level =
+              _level(state, state.nextReviewAt.add(Duration(days: day)));
+          if (seen.isEmpty || seen.last != level) seen.add(level);
+        }
+        expect(seen, [
+          MemoryLevel.strong,
+          MemoryLevel.good,
+          MemoryLevel.weak,
+          MemoryLevel.critical,
+        ]);
+      });
+
+      test('a correct answer on a faded word restores it', () {
+        final faded = _state(
+            repetitions: 1, interval: 1, reviewCount: 1, nextReviewAt: _at(1));
+        expect(_level(faded, now), MemoryLevel.critical);
+
+        final result = _sut.applySmTwo(faded, 0.9, now: now);
+        expect(result.sm2Interval, 6);
+        expect(_level(result, now), MemoryLevel.good);
+      });
     });
 
-    test('a long-neglected strong word is no longer strong', () {
-      final state = _state(repetitions: 5, interval: 45, nextReviewAt: now);
-      expect(sut.stageFromStrength(sut.currentStrength(state, now)), 1);
-      final later = now.add(const Duration(days: 200));
-      expect(
-        sut.stageFromStrength(sut.currentStrength(state, later)),
-        greaterThan(1),
-      );
+    test(
+        'a learner reviewing daily at any hour never sees a recalled word '
+        'below good', () {
+      // Five words added on each of the first ten days; every day all due
+      // words are recalled at a random time between 07:00 and 23:59.
+      final rng = Random(7);
+      final words = <MemoryState>[];
+      for (var day = 1; day <= 30; day++) {
+        if (day <= 10) {
+          for (var i = 0; i < 5; i++) {
+            words.add(_newWord(_at(day, 0, 30)));
+          }
+        }
+        final at = _at(day, 7 + rng.nextInt(17), rng.nextInt(60));
+        for (var i = 0; i < words.length; i++) {
+          if (words[i].reviewCount > 0) {
+            expect(_level(words[i], at), isIn(_goodOrStrong),
+                reason: 'day $day, word $i');
+          }
+          if (_sut.isDue(words[i], at)) {
+            words[i] = _sut.applySmTwo(words[i], 0.9, now: at);
+          }
+        }
+      }
+      // Words added on the first days have become strong.
+      expect(_level(words.first, _at(30, 23)), MemoryLevel.strong);
     });
   });
 }

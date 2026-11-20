@@ -301,6 +301,9 @@ class AppLocalizationsKo extends AppLocalizations {
   String get memoryCritical => '위험';
 
   @override
+  String get memoryLearning => '학습 중';
+
+  @override
   String get allCaughtUp => '모두 완료!';
 
   @override

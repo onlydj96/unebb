@@ -120,7 +120,17 @@ void main() {
     await tester.pumpWidget(await testApp(
       const DashboardScreen(),
       overrides: _offlineOverrides(
-        words: [vocab('fresh'), vocab('neglected'), vocab('new')],
+        words: [
+          for (final id in [
+            'fresh',
+            'neglected',
+            'just-due',
+            'lapsed',
+            'unknown',
+            'new',
+          ])
+            vocab(id),
+        ],
         memory: [
           memory('fresh',
               reviewCount: 4,
@@ -133,15 +143,27 @@ void main() {
               interval: 45,
               repetitions: 4,
               nextReviewAt: now.subtract(const Duration(days: 300))),
+          // Recalled once and due a minute ago: still good, not critical.
+          memory('just-due',
+              reviewCount: 1,
+              repetitions: 1,
+              nextReviewAt: now.subtract(const Duration(minutes: 1))),
+          // Recalled before, missed last time.
+          memory('lapsed', reviewCount: 3, correctCount: 2, incorrectCount: 1),
+          // Never recalled ("I don't know" on first sight).
+          memory('unknown', reviewCount: 1, incorrectCount: 1),
           memory('new'),
         ],
       ),
     ));
     await tester.pump();
 
-    expect(find.text('2 words'), findsOneWidget); // reviewed words only
+    expect(find.text('5 words'), findsOneWidget); // reviewed words only
     expect(find.text('Strong 1'), findsOneWidget);
+    expect(find.text('Good 1'), findsOneWidget);
     expect(find.text('Weak 1'), findsOneWidget);
+    expect(find.text('Critical 1'), findsOneWidget);
+    expect(find.text('Learning 1'), findsOneWidget);
     // Mastered tile.
     expect(
       find.descendant(
@@ -173,6 +195,30 @@ void main() {
     await tester.pump();
     expect(find.text('ephemeral'), findsOneWidget);
     expect(find.text('English'), findsOneWidget);
+  });
+
+  testWidgets('word cards show memory only once a word has been reviewed',
+      (tester) async {
+    await tester.pumpWidget(await testApp(
+      const VocabularyListScreen(),
+      overrides: _offlineOverrides(
+        words: [vocab('new', word: 'fresh'), vocab('seen', word: 'known')],
+        memory: [
+          memory('new'),
+          memory('seen',
+              reviewCount: 1,
+              repetitions: 1,
+              nextReviewAt:
+                  DateTime.now().toUtc().add(const Duration(days: 1))),
+        ],
+      ),
+    ));
+    await tester.pump();
+
+    expect(find.text('fresh'), findsOneWidget);
+    expect(find.text('known'), findsOneWidget);
+    // Only the reviewed word has a memory bar.
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
   });
 
   testWidgets(
