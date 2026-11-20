@@ -198,6 +198,7 @@
   "answerIncorrect": "아쉬워요",
   "verdictPass": "잘 기억했어요",
   "verdictFail": "조금 더 연습해요",
+  "undoLastAnswer": "방금 한 답 되돌리기",
   "moveOn": "그냥 넘어가기",
   "writeASentence": "문장 만들기",
   "writingPractice": "작문 연습",

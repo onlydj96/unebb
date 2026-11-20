@@ -161,6 +161,26 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen>
     _notifier.nextWord();
   }
 
+  /// Takes back the last choice. A typed (or spoken) answer comes back into
+  /// the field, cursor at the end, so a typo is a one-character fix.
+  void _undo() {
+    if (ref.read(voiceModeProvider).isEnabled) {
+      unawaited(ref.read(voiceModeProvider.notifier).stop());
+    }
+    _notifier.undo();
+    final state = ref.read(reviewNotifierProvider);
+    final draft = switch (state.phase) {
+          ReviewPhase.meaningInput => state.meaningAnswer,
+          ReviewPhase.translationInput => state.translationAnswer,
+          _ => null,
+        } ??
+        '';
+    _answerController.value = TextEditingValue(
+      text: draft,
+      selection: TextSelection.collapsed(offset: draft.length),
+    );
+  }
+
   static const _outsideSession = {
     ReviewPhase.loading,
     ReviewPhase.empty,
@@ -188,7 +208,18 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen>
           tooltip: l10n.back,
           onPressed: _close,
         ),
-        actions: const [VoiceModeToggle(), SizedBox(width: AppSpacing.sm)],
+        actions: [
+          // Always in the same place during a session, so it is there to
+          // find the moment a slip is noticed; disabled while unavailable.
+          if (_inSession(state))
+            IconButton(
+              icon: const Icon(Icons.undo_rounded),
+              tooltip: l10n.undoLastAnswer,
+              onPressed: state.canUndo ? _undo : null,
+            ),
+          const VoiceModeToggle(),
+          const SizedBox(width: AppSpacing.sm),
+        ],
         bottom: _inSession(state)
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(14),

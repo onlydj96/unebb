@@ -1220,6 +1220,12 @@ abstract class AppLocalizations {
   /// **'Keep practicing'**
   String get verdictFail;
 
+  /// No description provided for @undoLastAnswer.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo last answer'**
+  String get undoLastAnswer;
+
   /// No description provided for @moveOn.
   ///
   /// In en, this message translates to:

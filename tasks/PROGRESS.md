@@ -234,6 +234,37 @@ tsc --strict (Edge Functions, Deno shim) → OK
 - `supabase functions deploy generate-explanation evaluate-answer generate-question`
 - Confirm the `evaluate-answer` model id (`gpt-5.6-luna`) exists for the account
 
+## Phase 18 — Review undo: take back the last answer (2026-11-20)
+
+A slip in a review (wrong button, typo, misheard voice answer, "next"
+tapped before reading) used to stick: the word was graded and scheduled as
+answered. The review app bar now has an undo button (↶, "방금 한 답
+되돌리기"), always in the same place, disabled when there is nothing to
+take back.
+
+- [x] `ReviewNotifier.undo` / `ReviewUiState.canUndo`: meaning input →
+      "Do you know this word?"; translation input → meaning input (the same
+      exercise follows, no AI call); a graded answer — or the previous
+      word's, until the current one is answered — → the step it was given
+      on, the answer back in the field with the cursor at the end
+- [x] The undone review's memory state is restored (local map, server);
+      per-word save chain so the undo never overtakes the review it takes
+      back; a review queued offline is dropped from the queue
+- [x] One level: answering the next word makes the previous answer final.
+      Its `review_results` row and error patterns are recorded only then
+      (or at session end / app background / screen close) — history stays
+      append-only and slips never reach it, nor the "patterns to watch"
+- [x] Never while the AI works, from the error view or after the session
+- [x] New string (en/ko): undoLastAnswer
+
+### Verification (2026-11-20)
+
+```
+dart format --set-exit-if-changed lib test → 0 changed
+flutter analyze        → No issues found
+flutter test           → 209/209 passed (14 new: 12 notifier, 2 widget)
+```
+
 ## Phase 17 — Memory model v2: honest memory levels (2026-11-20)
 
 The dashboard showed 338 of 390 reviewed words as "critical" (위험). Live

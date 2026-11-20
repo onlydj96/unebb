@@ -634,6 +634,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get verdictFail => 'Keep practicing';
 
   @override
+  String get undoLastAnswer => 'Undo last answer';
+
+  @override
   String get moveOn => 'Move on';
 
   @override

@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:unebb/core/exceptions/app_exceptions.dart';
 import 'package:unebb/core/services/cache_service.dart';
 import 'package:unebb/data/repositories/providers.dart';
+import 'package:unebb/domain/models/memory_state.dart';
 import 'package:unebb/features/auth/providers/auth_provider.dart';
 import 'package:unebb/features/auth/providers/profile_provider.dart';
 import 'package:unebb/features/review/providers/review_providers.dart';
@@ -148,6 +149,8 @@ void main() {
       await n.startSession(mode: 'all');
       n.tapWord();
       await n.answerDontKnowWord();
+      await n.nextWord(); // finishing the session makes the answer final
+      await pumpEventQueue();
 
       final result = env.reviewRepo.results.single;
       expect(result.answerType, 'skip');
@@ -550,16 +553,20 @@ void main() {
           env.evalService.calls.map((call) => call.evalType),
           ['translation'],
         );
-        // Graded once as a miss: no second SM-2 update, no extra history row,
-        // and a good practice sentence does not count as a correct answer.
+        // Graded once as a miss: no second SM-2 update, and a good practice
+        // sentence does not count as a correct answer.
         expect(env.memRepo.updates.single.incorrectCount, 1);
-        expect(env.reviewRepo.results.single.questionType, 'knowledge');
         expect(state.correctCount, 0);
 
         await n.nextWord();
         expect(_state(c).phase, ReviewPhase.showWord);
         expect(_state(c).currentIndex, 1);
         expect(_state(c).isPractice, isFalse);
+
+        // …and no extra history row.
+        await n.saveProgress();
+        await pumpEventQueue();
+        expect(env.reviewRepo.results.single.questionType, 'knowledge');
       });
 
       test('after a failed meaning the prefetched exercise is reused',
@@ -582,6 +589,9 @@ void main() {
         await n.submitTranslation('sentence');
         expect(_state(c).phase, ReviewPhase.showPracticeResult);
         expect(env.memRepo.updates, hasLength(1));
+
+        await n.nextWord();
+        await pumpEventQueue();
         expect(env.reviewRepo.results.single.questionType, 'meaning');
       });
 
@@ -677,6 +687,346 @@ void main() {
         expect(_state(c).canPractice, isFalse);
         await n.startPractice();
         expect(_state(c).phase, ReviewPhase.showWord);
+      });
+    });
+
+    group('undo', () {
+      MemoryState saved(_Env env, String id) =>
+          env.memRepo.states.firstWhere((s) => s.vocabularyId == id);
+
+      test('"I don\'t know" by mistake: the word and its memory come back',
+          () async {
+        final env = _Env(ids: ['a', 'b']);
+        final c = await env.container();
+        c.listen(memoryStatesMapNotifierProvider, (_, __) {});
+        await c.read(memoryStatesMapNotifierProvider.future);
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        final before = _state(c).currentMemoryState!;
+        // New words come in random order.
+        final first = before.vocabularyId;
+        n.tapWord();
+        await n.answerDontKnowWord();
+        expect(_state(c).canUndo, isTrue);
+
+        n.undo();
+        final state = _state(c);
+        expect(state.phase, ReviewPhase.askKnowledge);
+        expect(state.currentIndex, 0);
+        expect(state.currentGraded, isFalse);
+        expect(state.currentMemoryState, before);
+        expect(state.canUndo, isFalse);
+        await pumpEventQueue();
+        expect(saved(env, first), before);
+        expect(
+          c.read(memoryStatesMapNotifierProvider).requireValue[first],
+          before,
+        );
+
+        // The corrected answer is graded from the state before the slip…
+        n.answerKnowWord();
+        await n.submitMeaning('meaning');
+        await n.submitTranslation('sentence');
+        expect(_state(c).phase, ReviewPhase.showResult);
+        expect(_state(c).correctCount, 1);
+        expect(saved(env, first).reviewCount, 1);
+        expect(saved(env, first).incorrectCount, 0);
+
+        // …and it is the only one in the history.
+        await n.nextWord();
+        n.tapWord();
+        await n.answerDontKnowWord(); // makes the first word final
+        await pumpEventQueue();
+        expect(
+          env.reviewRepo.results.map((r) => r.questionType),
+          ['translation'],
+        );
+      });
+
+      test('a typo in the meaning comes back to be fixed', () async {
+        final env = _Env(ids: ['a']);
+        env.evalService.meaningScore = 0.2;
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        n.answerKnowWord(); // prefetches the exercise
+        await n.submitMeaning('mening');
+        expect(_state(c).phase, ReviewPhase.meaningFailed);
+
+        n.undo();
+        final state = _state(c);
+        expect(state.phase, ReviewPhase.meaningInput);
+        expect(state.meaningAnswer, 'mening');
+        expect(state.meaningEvaluation, isNull);
+        expect(state.currentGraded, isFalse);
+
+        env.evalService.meaningScore = 0.9;
+        await n.submitMeaning('meaning');
+        expect(_state(c).phase, ReviewPhase.translationInput);
+        // The exercise prefetched before the slip is still used.
+        expect(env.questionService.calls, 1);
+
+        await n.submitTranslation('sentence');
+        await n.nextWord(); // the session is over: the answer is final
+        await pumpEventQueue();
+        expect(env.reviewRepo.results.single.questionType, 'translation');
+        // The mistake "found" in the typo is not one to watch for.
+        expect(env.patternRepo.upserts, isEmpty);
+      });
+
+      test('the patterns of a final miss are recorded', () async {
+        final env = _Env(ids: ['a']);
+        env.evalService.meaningScore = 0.2;
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        n.answerKnowWord();
+        await n.submitMeaning('wrong');
+        await pumpEventQueue();
+        expect(env.patternRepo.upserts, isEmpty); // could still be a slip
+
+        await n.nextWord();
+        await pumpEventQueue();
+        expect(env.patternRepo.upserts, [
+          ['pattern'],
+        ]);
+      });
+
+      test('a slip in the translation keeps the exercise and the answer',
+          () async {
+        final env = _Env(ids: ['a']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        n.answerKnowWord();
+        await n.submitMeaning('meaning');
+        final sentence = _state(c).translationSentence;
+        await n.submitTranslation('my sentense');
+        expect(_state(c).phase, ReviewPhase.showResult);
+        expect(_state(c).correctCount, 1);
+
+        n.undo();
+        final state = _state(c);
+        expect(state.phase, ReviewPhase.translationInput);
+        expect(state.isPractice, isFalse);
+        expect(state.translationSentence, sentence);
+        expect(state.translationAnswer, 'my sentense');
+        expect(state.meaningEvaluation, isNotNull);
+        expect(state.correctCount, 0);
+
+        await n.submitTranslation('my sentence');
+        expect(_state(c).phase, ReviewPhase.showResult);
+        expect(_state(c).correctCount, 1);
+        // Only the translation is evaluated again.
+        expect(
+          env.evalService.calls.map((call) => call.evalType),
+          ['meaning', 'translation', 'translation'],
+        );
+      });
+
+      test('steps back through choices that were not graded yet', () async {
+        final env = _Env(ids: ['a']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        n.answerKnowWord();
+        n.undo(); // "I know it" by mistake
+        expect(_state(c).phase, ReviewPhase.askKnowledge);
+
+        n.answerKnowWord();
+        await n.submitMeaning('meaning');
+        expect(_state(c).phase, ReviewPhase.translationInput);
+        n.undo();
+        expect(_state(c).phase, ReviewPhase.meaningInput);
+        expect(_state(c).meaningAnswer, 'meaning');
+
+        // The same exercise follows, without another AI call.
+        await n.submitMeaning('meaning');
+        expect(_state(c).phase, ReviewPhase.translationInput);
+        expect(_state(c).translationSentence, 'sentence for word-a');
+        expect(env.questionService.calls, 1);
+        expect(env.memRepo.updates, isEmpty);
+      });
+
+      test('"next" tapped too early: the previous word can be taken back',
+          () async {
+        final env = _Env(ids: ['a', 'b']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        final first = _state(c).currentItem!.id;
+        n.tapWord();
+        await n.answerDontKnowWord();
+        await n.nextWord();
+        expect(_state(c).sessionPosition, 2);
+        expect(_state(c).canUndo, isTrue);
+
+        n.undo();
+        expect(_state(c).currentIndex, 0);
+        expect(_state(c).sessionPosition, 1);
+        expect(_state(c).phase, ReviewPhase.askKnowledge);
+        expect(_state(c).currentItem!.id, first);
+      });
+
+      test('only the last answer can be taken back', () async {
+        final env = _Env(ids: ['a', 'b', 'c']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        final order = [
+          for (final item in _state(c).session!.vocabularyItems) item.id,
+        ];
+        for (var i = 0; i < 2; i++) {
+          n.tapWord();
+          await n.answerDontKnowWord();
+          await n.nextWord();
+        }
+
+        n.undo();
+        expect(_state(c).currentItem!.id, order[1]);
+        expect(_state(c).canUndo, isFalse);
+        await pumpEventQueue();
+        expect(env.reviewRepo.results.map((r) => r.vocabularyId), [order[0]]);
+        expect(saved(env, order[0]).reviewCount, 1);
+        expect(saved(env, order[1]).reviewCount, 0);
+      });
+
+      test('the writing practice is left by taking back the miss', () async {
+        final env = _Env(ids: ['a']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        await n.answerDontKnowWord();
+        await n.startPractice();
+        expect(_state(c).isPractice, isTrue);
+
+        n.undo();
+        expect(_state(c).phase, ReviewPhase.askKnowledge);
+        expect(_state(c).isPractice, isFalse);
+        await pumpEventQueue();
+        expect(saved(env, 'a').reviewCount, 0);
+      });
+
+      test(
+          'nothing to take back before an answer, while the AI works, '
+          'or once the session is over', () async {
+        final env = _Env(ids: ['a']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        expect(_state(c).canUndo, isFalse);
+        n.tapWord();
+        n.undo();
+        expect(_state(c).phase, ReviewPhase.askKnowledge);
+
+        n.answerKnowWord();
+        final gate = Completer<void>();
+        env.evalService.gate = gate;
+        final submitting = n.submitMeaning('meaning');
+        await pumpEventQueue();
+        expect(_state(c).phase, ReviewPhase.evaluatingMeaning);
+        n.undo();
+        expect(_state(c).phase, ReviewPhase.evaluatingMeaning);
+        gate.complete();
+        await submitting;
+
+        await n.submitTranslation('sentence');
+        await n.nextWord();
+        expect(_state(c).phase, ReviewPhase.complete);
+        expect(_state(c).canUndo, isFalse);
+      });
+
+      test('the undo is saved after the review it takes back', () async {
+        final env = _Env(ids: ['a']);
+        final slowSave = Completer<void>();
+        env.memRepo.nextUpdateGate = slowSave;
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        final before = _state(c).currentMemoryState!;
+        n.tapWord();
+        final grading = n.answerDontKnowWord(); // its save hangs
+        await pumpEventQueue();
+        n.undo();
+        await pumpEventQueue();
+        expect(env.memRepo.updates, isEmpty);
+
+        slowSave.complete();
+        await grading;
+        await pumpEventQueue();
+        expect(env.memRepo.updates, hasLength(2));
+        expect(saved(env, 'a'), before);
+      });
+
+      test('an undone review that failed to save is never sent', () async {
+        final env = _Env(ids: ['a']);
+        env.memRepo.updateError = Exception('offline');
+        final c = await env.container();
+        c.listen(memoryStatesMapNotifierProvider, (_, __) {});
+        final memoryStates = c.read(memoryStatesMapNotifierProvider.notifier);
+        await c.read(memoryStatesMapNotifierProvider.future);
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        n.tapWord();
+        await n.answerDontKnowWord();
+        final cache = c.read(cacheServiceProvider);
+        expect(cache.getPendingMemoryStates(), hasLength(1));
+
+        n.undo();
+        await pumpEventQueue();
+        expect(cache.getPendingMemoryStates(), isEmpty);
+
+        env.memRepo.updateError = null;
+        await memoryStates.refresh();
+        expect(saved(env, 'a').reviewCount, 0);
+        expect(
+          c
+              .read(memoryStatesMapNotifierProvider)
+              .requireValue['a']!
+              .reviewCount,
+          0,
+        );
+      });
+
+      test('the last answer is recorded when the app is left', () async {
+        final env = _Env(ids: ['a', 'b']);
+        final c = await env.container();
+        final n = _notifier(c);
+
+        await n.startSession(mode: 'all');
+        // New words come in random order.
+        final first = _state(c).currentItem!.id;
+        n.tapWord();
+        await n.answerDontKnowWord();
+        await pumpEventQueue();
+        expect(env.reviewRepo.results, isEmpty);
+
+        await n.saveProgress(); // app paused / screen closed
+        await pumpEventQueue();
+        expect(env.reviewRepo.results.single.vocabularyId, first);
+
+        // Recorded once, also when the next answer makes it final.
+        await n.nextWord();
+        n.tapWord();
+        await n.answerDontKnowWord();
+        await pumpEventQueue();
+        expect(env.reviewRepo.results.map((r) => r.vocabularyId), [first]);
       });
     });
 

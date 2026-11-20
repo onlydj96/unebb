@@ -172,6 +172,10 @@ HISTORY
 
 Never overwrite historical review results.
 
+A row is inserted once its answer is final. While the learner can still
+take an answer back (review undo, see docs/MEMORY_MODEL.md), it is held on
+the client, so a slip never has to be deleted from the history.
+
 Example:
 
 ```text

@@ -290,6 +290,76 @@ void main() {
     });
   });
 
+  group('undo', () {
+    IconButton undoButton(WidgetTester tester) => tester.widget<IconButton>(
+          find.widgetWithIcon(IconButton, Icons.undo_rounded),
+        );
+
+    testWidgets('a mistyped meaning comes back into the field to be fixed',
+        (tester) async {
+      final env = _Env(['a']);
+      env.evalService.meaningScore = 0.2;
+      await tester.pumpWidget(await testApp(
+        const ReviewScreen(mode: 'all'),
+        overrides: env.overrides(),
+      ));
+      await _settle(tester);
+
+      await tester.tap(find.text('word a'));
+      await _settle(tester);
+      await tester.tap(find.text('I know it'));
+      await _settle(tester);
+      await tester.enterText(find.byType(TextField), 'mening');
+      await tester.pump();
+      await tester.tap(find.text('Submit answer'));
+      await _settle(tester);
+      expect(find.text('Not quite'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Undo last answer'));
+      await _settle(tester);
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller!.text, 'mening');
+      expect(field.controller!.selection.baseOffset, 'mening'.length);
+
+      env.evalService.meaningScore = 0.9;
+      await tester.enterText(find.byType(TextField), 'meaning');
+      await tester.pump();
+      await tester.tap(find.text('Submit answer'));
+      await _settle(tester);
+      expect(find.text('sentence for word a'), findsOneWidget);
+    });
+
+    testWidgets('goes back to the previous card, and only when there is one',
+        (tester) async {
+      final env = _Env(['a', 'b']);
+      await tester.pumpWidget(await testApp(
+        const ReviewScreen(mode: 'all'),
+        overrides: env.overrides(),
+      ));
+      await _settle(tester);
+
+      expect(find.text('1 / 2'), findsOneWidget);
+      expect(undoButton(tester).onPressed, isNull);
+
+      await tester.tap(find.textContaining('word '));
+      await _settle(tester);
+      await tester.tap(find.text("I don't know it"));
+      await _settle(tester);
+      await tester.tap(find.text('Move on'));
+      await _settle(tester);
+      expect(find.text('2 / 2'), findsOneWidget);
+      expect(undoButton(tester).onPressed, isNotNull);
+
+      await tester.tap(find.byTooltip('Undo last answer'));
+      await _settle(tester);
+      expect(find.text('1 / 2'), findsOneWidget);
+      // Back on the question that was answered by mistake.
+      expect(find.text('I know it'), findsOneWidget);
+      expect(undoButton(tester).onPressed, isNull);
+      expect(env.memRepo.states.every((s) => s.reviewCount == 0), isTrue);
+    });
+  });
+
   testWidgets('voice mode: answering "don\'t know" shows the explanation',
       (tester) async {
     final env = _Env(['a']);
@@ -318,6 +388,9 @@ void main() {
     // The explanation offers the same choice as in text mode.
     expect(find.text('Move on'), findsOneWidget);
     expect(find.text('Write a sentence'), findsOneWidget);
+
+    await tester.tap(find.text('Move on'));
+    await _settle(tester);
     expect(env.reviewRepo.results.single.answerType, 'skip');
   });
 }

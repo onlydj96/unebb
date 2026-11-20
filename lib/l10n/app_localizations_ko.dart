@@ -608,6 +608,9 @@ class AppLocalizationsKo extends AppLocalizations {
   String get verdictFail => '조금 더 연습해요';
 
   @override
+  String get undoLastAnswer => '방금 한 답 되돌리기';
+
+  @override
   String get moveOn => '그냥 넘어가기';
 
   @override

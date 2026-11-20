@@ -320,6 +320,7 @@
   "answerIncorrect": "Not quite",
   "verdictPass": "Nice recall",
   "verdictFail": "Keep practicing",
+  "undoLastAnswer": "Undo last answer",
   "moveOn": "Move on",
   "writeASentence": "Write a sentence",
   "writingPractice": "Writing practice",

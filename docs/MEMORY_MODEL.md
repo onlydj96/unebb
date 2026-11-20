@@ -95,6 +95,31 @@ memory-state sync (app start, resume, reconnect, review start,
 pull-to-refresh). It is only written if the server has no newer review of
 that word (`last_reviewed_at`), so it never overwrites another device.
 
+### Taking back an answer (`ReviewNotifier.undo`)
+
+The review screen's undo button (↶, app bar) takes back the learner's last
+choice: a wrong button, a typo, a misheard voice answer, "next" tapped too
+early.
+
+| From | Back to |
+|---|---|
+| meaning input | "Do you know this word?" (nothing graded yet) |
+| translation input | meaning input, answer kept; the same exercise follows |
+| result / explanation / "not quite" / writing practice | the step the answer was given on, with the answer in the field |
+| next word, before it is answered | the previous word, same as above |
+
+A taken-back review restores the word's memory state from before it (and
+the session's correct count). Saves of one word are chained, so the undo
+never overtakes the review it takes back; a review waiting in the offline
+queue is removed from it. If the undo itself cannot be saved, the server
+keeps the review until the word is answered again — the learner is on it.
+
+Only the last graded answer can be taken back: answering the next word
+makes it final. Its `review_results` row and detected error patterns are
+recorded only then (or when the session ends, the app goes to the
+background or the screen closes), so a slip never reaches the history.
+Taken back after the app went to the background, its row stays.
+
 ## Memory Update
 
 Memory strength must be updated after every review.

@@ -13,6 +13,7 @@ import 'package:unebb/domain/models/memory_state.dart';
 import 'package:unebb/domain/models/review_result.dart';
 import 'package:unebb/domain/models/review_session.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
+import 'package:unebb/domain/repositories/memory_state_repository.dart';
 import 'package:unebb/features/auth/providers/profile_provider.dart';
 import 'package:unebb/features/vocabulary/providers/ai_content_provider.dart';
 import 'package:unebb/features/vocabulary/providers/vocabulary_providers.dart';
@@ -80,6 +81,7 @@ class ReviewUiState {
     this.error,
     this.canRetryStep = false,
     this.isPractice = false,
+    this.undoableIndex,
   });
 
   final ReviewPhase phase;
@@ -137,6 +139,11 @@ class ReviewUiState {
   /// practice is evaluated for feedback only (no SM-2 update, no history row).
   final bool isPractice;
 
+  /// Index of the word whose graded answer can still be taken back (see
+  /// [ReviewNotifier.undo]): the last one graded, until the next word is
+  /// answered.
+  final int? undoableIndex;
+
   VocabularyItem? get currentItem =>
       session?.vocabularyItems.elementAtOrNull(currentIndex);
 
@@ -148,6 +155,29 @@ class ReviewUiState {
   bool get canPractice {
     final item = currentItem;
     return item != null && currentGraded && hasAiContent(item);
+  }
+
+  /// Whether [ReviewNotifier.undo] can take back the learner's last choice
+  /// from the current view. Never while the AI is working.
+  bool get canUndo {
+    if (session == null) return false;
+    return switch (phase) {
+      // "I know it" / the meaning: nothing graded yet, a step back.
+      ReviewPhase.meaningInput => true,
+      ReviewPhase.translationInput when !isPractice => true,
+      // This word's graded answer (practice is ungraded, so it counts here).
+      ReviewPhase.showExplanation ||
+      ReviewPhase.meaningFailed ||
+      ReviewPhase.showResult ||
+      ReviewPhase.translationInput ||
+      ReviewPhase.showPracticeResult =>
+        undoableIndex == currentIndex,
+      // The previous word's answer, until this one is answered.
+      ReviewPhase.showWord ||
+      ReviewPhase.askKnowledge =>
+        undoableIndex != null && undoableIndex == currentIndex - 1,
+      _ => false,
+    };
   }
 
   /// Words in this (possibly resumed) session.
@@ -192,8 +222,10 @@ class ReviewUiState {
     Object? error,
     bool? canRetryStep,
     bool? isPractice,
+    int? undoableIndex,
     bool clearError = false,
     bool clearStepData = false,
+    bool clearUndo = false,
   }) {
     return ReviewUiState(
       phase: phase ?? this.phase,
@@ -231,7 +263,70 @@ class ReviewUiState {
           ? false
           : canRetryStep ?? this.canRetryStep,
       isPractice: clearStepData ? false : isPractice ?? this.isPractice,
+      // Survives moving on: the previous word stays undoable on the next one.
+      undoableIndex: clearUndo ? null : undoableIndex ?? this.undoableIndex,
     );
+  }
+}
+
+/// A graded answer that can still be taken back (see [ReviewNotifier.undo]).
+class _GradedAnswer {
+  _GradedAnswer({
+    required this.index,
+    required this.answeredAt,
+    required this.answered,
+    required this.before,
+    required this.after,
+    required this.correct,
+    required this.patterns,
+    required this.result,
+  });
+
+  /// Position of the word in the session.
+  final int index;
+
+  /// The step the answer was given on, and the state at that moment (what
+  /// the learner had entered).
+  final ReviewPhase answeredAt;
+  final ReviewUiState answered;
+
+  /// The word's memory state before and after this answer.
+  final MemoryState before;
+  final MemoryState after;
+
+  /// Whether the answer added to the session's correct count.
+  final bool correct;
+
+  /// History row and detected mistake patterns, recorded once the answer can
+  /// no longer be taken back: a typo must not become a "pattern to watch".
+  final ReviewResult result;
+  final List<String> patterns;
+  bool recorded = false;
+
+  String get vocabularyId => before.vocabularyId;
+
+  /// [current] back on the step the answer was given on, with what the
+  /// learner had entered there, ready to be corrected.
+  ReviewUiState reopenIn(ReviewUiState current) {
+    final step = current.copyWith(
+      phase: answeredAt,
+      currentIndex: index,
+      wordPatterns: current.allWordPatterns[vocabularyId] ?? const [],
+      clearStepData: true,
+      clearUndo: true,
+    );
+    return switch (answeredAt) {
+      ReviewPhase.meaningInput =>
+        step.copyWith(meaningAnswer: answered.meaningAnswer),
+      ReviewPhase.translationInput => step.copyWith(
+          meaningAnswer: answered.meaningAnswer,
+          meaningEvaluation: answered.meaningEvaluation,
+          translationSentence: answered.translationSentence,
+          wordHint: answered.wordHint,
+          translationAnswer: answered.translationAnswer,
+        ),
+      _ => step,
+    };
   }
 }
 
@@ -257,6 +352,14 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
 
   /// Words graded in this session (stored as `completed_items`).
   final Set<String> _gradedIds = {};
+
+  /// The last graded answer while it can still be taken back.
+  _GradedAnswer? _lastAnswer;
+
+  /// Memory-state saves per word, chained so they reach the server in the
+  /// order they were made: an undo must not overtake the review it takes
+  /// back, nor the answer given after it.
+  final Map<String, Future<void>> _memoryWrites = {};
 
   /// Ignores updates after the screen closed (the provider is auto-disposed
   /// while AI calls may still be running).
@@ -457,6 +560,7 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
 
   int _resetForNewSession() {
     _clearRecovery();
+    _closeUndo();
     _prefetch = null;
     _prefetchFor = null;
     _gradedIds.clear();
@@ -480,6 +584,12 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
 
   /// Save the current position so the session can be resumed later.
   Future<void> saveProgress() async {
+    // Leaving or backgrounding the app: the last answer's history row must
+    // not wait for the next answer, the app may never come back. The answer
+    // stays undoable; taken back after this, its row remains in the history.
+    final last = _lastAnswer;
+    if (last != null) _recordHistory(last);
+
     final session = state.session;
     if (session == null) return;
     const nonSaveablePhases = {
@@ -588,6 +698,7 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       answerType: 'skip',
       questionType: 'knowledge',
       userAnswer: '',
+      answeredAt: ReviewPhase.askKnowledge,
     );
 
     if (!needsAiContentUpdate(item) &&
@@ -690,7 +801,6 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       if (!_isCurrent(index)) return;
 
       if (evaluation.overallScore < kPassScore) {
-        unawaited(_persistPatterns(ready.id, evaluation.detectedPatterns));
         await _grade(
           item: ready,
           index: index,
@@ -699,6 +809,9 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
           answerType: 'text',
           questionType: 'meaning',
           userAnswer: userAnswer,
+          patterns: evaluation.detectedPatterns,
+          // Also for spoken answers: the transcript can be corrected there.
+          answeredAt: ReviewPhase.meaningInput,
           onGraded: (s) => s.copyWith(
             phase: ReviewPhase.meaningFailed,
             meaningEvaluation: evaluation,
@@ -775,17 +888,15 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
         return;
       }
 
-      // Pattern bookkeeping must not delay the result.
-      unawaited(_persistPatterns(item.id, [
-        ...?state.meaningEvaluation?.detectedPatterns,
-        ...evaluation.detectedPatterns,
-      ]));
-
       await _finalizeWord(
         item: item,
         index: index,
         translationEvaluation: evaluation,
         translationAnswer: userAnswer,
+        patterns: [
+          ...?state.meaningEvaluation?.detectedPatterns,
+          ...evaluation.detectedPatterns,
+        ],
       );
     } catch (e, st) {
       if (!_isCurrent(index)) return;
@@ -814,7 +925,12 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
 
     final nextIndex = state.currentIndex + 1;
     if (nextIndex >= session.vocabularyItems.length) {
-      _emit(state.copyWith(phase: ReviewPhase.complete, clearError: true));
+      _closeUndo();
+      _emit(state.copyWith(
+        phase: ReviewPhase.complete,
+        clearError: true,
+        clearUndo: true,
+      ));
       try {
         await _ref
             .read(reviewRepositoryProvider)
@@ -834,6 +950,94 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       clearStepData: true,
     ));
     _prepareAhead();
+  }
+
+  /// Takes back the learner's last choice, for slips: a wrong button, a
+  /// typo, a misheard voice answer, "next" tapped too early.
+  ///
+  /// - meaning input → "Do you know this word?" again
+  /// - translation input → the meaning again; the same exercise follows
+  /// - a graded answer (result, explanation, practice), or the previous
+  ///   word's while this one is unanswered → the step it was given on, with
+  ///   what the learner entered there. Its memory state is restored and it
+  ///   leaves no history row.
+  ///
+  /// One graded answer can be taken back: answering the next word makes the
+  /// previous one final. See [ReviewUiState.canUndo].
+  void undo() {
+    if (!state.canUndo) return;
+    switch (state.phase) {
+      case ReviewPhase.meaningInput:
+        _emit(state.copyWith(
+          phase: ReviewPhase.askKnowledge,
+          clearStepData: true,
+        ));
+      case ReviewPhase.translationInput when !state.isPractice:
+        _reopenMeaning();
+      default:
+        _undoLastAnswer();
+    }
+  }
+
+  /// Translation input → meaning input. The meaning was evaluated but
+  /// nothing was graded yet.
+  void _reopenMeaning() {
+    final item = state.currentItem;
+    final sentence = state.translationSentence;
+    if (item == null) return;
+    if (sentence != null) {
+      // Submitting the meaning again leads to the same exercise, without
+      // another AI call.
+      _prefetchFor = item.id;
+      _prefetch = Future.value(QuestionContent(
+        questionType: 'translation',
+        sentence: sentence,
+        wordHint: state.wordHint ?? '',
+      ));
+    }
+    _emit(state
+        .copyWith(phase: ReviewPhase.meaningInput, clearStepData: true)
+        .copyWith(meaningAnswer: state.meaningAnswer));
+  }
+
+  void _undoLastAnswer() {
+    final answer = _lastAnswer;
+    if (answer == null) return;
+    _lastAnswer = null;
+    _clearRecovery();
+    _gradedIds.remove(answer.vocabularyId);
+
+    _emit(answer.reopenIn(state).copyWith(
+      memoryStates: {...state.memoryStates, answer.vocabularyId: answer.before},
+      correctCount: state.correctCount - (answer.correct ? 1 : 0),
+    ));
+    // Back on the meaning: get the exercise ready again (no-op if it still
+    // is, e.g. after a failed meaning).
+    if (state.phase == ReviewPhase.meaningInput) prefetchTranslation();
+
+    if (_ref.exists(memoryStatesMapNotifierProvider)) {
+      _ref
+          .read(memoryStatesMapNotifierProvider.notifier)
+          .updateState(answer.before);
+    }
+    unawaited(_saveMemoryState(answer.before, undoing: answer.after));
+  }
+
+  /// Records the last answer as final: nothing can take it back any more.
+  void _closeUndo() {
+    final last = _lastAnswer;
+    _lastAnswer = null;
+    if (last != null) _recordHistory(last);
+  }
+
+  /// Writes [answer]'s history row and patterns once. Rows are append-only,
+  /// so an answer is recorded only when it is final (see [saveProgress]).
+  /// Patterns are loaded at session start, so waiting changes no feedback.
+  void _recordHistory(_GradedAnswer answer) {
+    if (answer.recorded) return;
+    answer.recorded = true;
+    unawaited(_persistResult(answer.result));
+    unawaited(_persistPatterns(answer.vocabularyId, answer.patterns));
   }
 
   /// Retry after an error: re-runs the failed step when possible, otherwise
@@ -958,6 +1162,7 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     required int index,
     AiEvaluation? translationEvaluation,
     String? translationAnswer,
+    List<String> patterns = const [],
   }) async {
     final meaningEvaluation = state.meaningEvaluation ?? const AiEvaluation();
     final transScore = translationEvaluation?.overallScore;
@@ -979,13 +1184,17 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       answerType: 'text',
       questionType: translationEvaluation != null ? 'translation' : 'meaning',
       userAnswer: translationAnswer ?? state.meaningAnswer ?? '',
+      patterns: patterns,
       questionContext:
           translationEvaluation != null ? state.translationSentence : null,
+      answeredAt: translationEvaluation != null
+          ? ReviewPhase.translationInput
+          : ReviewPhase.meaningInput,
+      correct: correct,
       onGraded: (s) => s.copyWith(
         phase: ReviewPhase.showResult,
         translationEvaluation: translationEvaluation,
         combinedScore: combined,
-        correctCount: correct ? s.correctCount + 1 : s.correctCount,
       ),
     );
   }
@@ -993,6 +1202,10 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
   /// Applies SM-2 for one word, shows the outcome immediately and persists
   /// it. Persistence failures are logged, never surfaced as a broken session:
   /// the memory state drives scheduling, the history row is best-effort.
+  ///
+  /// [answeredAt] is the step the answer was given on, where [undo] brings
+  /// the learner back. [correct] adds to the session's correct count.
+  /// [patterns] (detected mistakes) are recorded with the history row.
   Future<void> _grade({
     required VocabularyItem item,
     required int index,
@@ -1001,6 +1214,9 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     required String answerType,
     required String questionType,
     required String userAnswer,
+    required ReviewPhase answeredAt,
+    bool correct = false,
+    List<String> patterns = const [],
     String? questionContext,
     ReviewUiState Function(ReviewUiState graded)? onGraded,
   }) async {
@@ -1018,27 +1234,18 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
     final updatedStrength = memoryService.currentStrength(updated, reviewedAt);
     _gradedIds.add(item.id);
 
-    var next = state.copyWith(
-      memoryStates: {...state.memoryStates, item.id: updated},
-    );
-    if (_isCurrent(index)) {
-      next = next.copyWith(
-        previousStrength: previousStrength,
-        updatedStrength: updatedStrength,
-        currentGraded: true,
-      );
-      if (onGraded != null) next = onGraded(next);
-    }
-    _emit(next);
-
-    // Keep dashboard / deck screens in sync without a refetch.
-    if (_ref.exists(memoryStatesMapNotifierProvider)) {
-      _ref.read(memoryStatesMapNotifierProvider.notifier).updateState(updated);
-    }
-
-    await Future.wait([
-      _persistMemoryState(updated),
-      _persistResult(ReviewResult(
+    final current = _isCurrent(index);
+    // This answer makes the previous one final.
+    _closeUndo();
+    _lastAnswer = _GradedAnswer(
+      index: index,
+      answeredAt: answeredAt,
+      answered: state,
+      before: memState,
+      after: updated,
+      correct: correct && current,
+      patterns: patterns,
+      result: ReviewResult(
         id: '',
         userId: session.userId,
         sessionId: session.id,
@@ -1051,14 +1258,60 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
         previousMemoryStrength: previousStrength,
         updatedMemoryStrength: updatedStrength,
         reviewedAt: reviewedAt,
-      )),
-    ]);
+      ),
+    );
+
+    var next = state.copyWith(
+      memoryStates: {...state.memoryStates, item.id: updated},
+      undoableIndex: index,
+    );
+    if (current) {
+      next = next.copyWith(
+        previousStrength: previousStrength,
+        updatedStrength: updatedStrength,
+        currentGraded: true,
+        correctCount: correct ? next.correctCount + 1 : null,
+      );
+      if (onGraded != null) next = onGraded(next);
+    }
+    _emit(next);
+
+    // Keep dashboard / deck screens in sync without a refetch.
+    if (_ref.exists(memoryStatesMapNotifierProvider)) {
+      _ref.read(memoryStatesMapNotifierProvider.notifier).updateState(updated);
+    }
+
+    await _saveMemoryState(updated);
   }
 
-  Future<void> _persistMemoryState(MemoryState updated) async {
-    // Read before awaiting: the screen may close while the request runs.
+  /// Saves [memoryState] once every earlier save of the same word is done.
+  /// With [undoing], it restores the state from before that review.
+  Future<void> _saveMemoryState(
+    MemoryState memoryState, {
+    MemoryState? undoing,
+  }) {
+    // Read now: the screen may close while earlier saves are running.
     final repository = _ref.read(memoryStateRepositoryProvider);
     final cacheService = _ref.read(cacheServiceProvider);
+    final id = memoryState.vocabularyId;
+
+    Future<void> save() => undoing == null
+        ? _persistMemoryState(repository, cacheService, memoryState)
+        : _restoreMemoryState(repository, cacheService, memoryState, undoing);
+
+    // An earlier save's error belongs to its own caller; this one still runs.
+    final saved = (_memoryWrites[id] ?? Future<void>.value())
+        .then<void>((_) {}, onError: (Object _) {})
+        .then((_) => save());
+    _memoryWrites[id] = saved;
+    return saved;
+  }
+
+  static Future<void> _persistMemoryState(
+    MemoryStateRepository repository,
+    CacheService cacheService,
+    MemoryState updated,
+  ) async {
     try {
       await repository.update(updated);
     } catch (e, st) {
@@ -1069,6 +1322,26 @@ class ReviewNotifier extends StateNotifier<ReviewUiState> {
       );
       // The local map already shows the review; the next sync saves it.
       await cacheService.addPendingMemoryState(updated);
+    }
+  }
+
+  /// Puts back [before] in place of the review [undone].
+  static Future<void> _restoreMemoryState(
+    MemoryStateRepository repository,
+    CacheService cacheService,
+    MemoryState before,
+    MemoryState undone,
+  ) async {
+    try {
+      // A review that failed to save must not be sent by the next sync.
+      await cacheService.removePendingMemoryStates([undone]);
+      await repository.update(before);
+    } catch (e, st) {
+      // Not queued: the offline queue only saves reviews newer than the
+      // server's. The learner is back on the word, and answering it again
+      // replaces the undone review.
+      AppLogger.warning('Failed to save an undone review', details: e);
+      AppLogger.debug('Undo save stack trace', data: st);
     }
   }
 

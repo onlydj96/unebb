@@ -233,6 +233,10 @@ class FakeMemoryStateRepository implements MemoryStateRepository {
   /// When set, saving a state throws this (e.g. offline).
   Object? updateError;
 
+  /// When set, the next [update] only completes with this completer (a slow
+  /// request); later ones run immediately.
+  Completer<void>? nextUpdateGate;
+
   @override
   Future<List<MemoryState>> getAll() async {
     getAllCalls++;
@@ -274,6 +278,9 @@ class FakeMemoryStateRepository implements MemoryStateRepository {
 
   @override
   Future<MemoryState> update(MemoryState state) async {
+    final gate = nextUpdateGate;
+    nextUpdateGate = null;
+    if (gate != null) await gate.future;
     final error = updateError;
     if (error != null) throw error;
     updates.add(state);
