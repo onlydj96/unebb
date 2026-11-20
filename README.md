@@ -13,10 +13,10 @@ AI-powered adaptive vocabulary learning application built with Flutter and Supab
 
 ## Prerequisites
 
-- Flutter 3.29.3 (Dart 3.7) — pinned in `.fvmrc`. With [FVM](https://fvm.app):
+- Flutter 3.47.9 (Dart 3.13) — pinned in `.fvmrc`. With [FVM](https://fvm.app):
   `fvm install`, then prefix commands with `fvm` (e.g. `fvm flutter pub get`).
-  Older SDKs fail at `flutter pub get` (the locked `freezed`/`build` versions
-  need Dart 3.7).
+  Older SDKs fail at `flutter pub get` (the locked `build_runner`/`analyzer`
+  versions need Dart 3.13).
 - Deno 2 (only for checking the Supabase Edge Functions)
 - Supabase account (for backend services)
 
@@ -47,7 +47,7 @@ AI-powered adaptive vocabulary learning application built with Flutter and Supab
    ```bash
    make codegen
    # or
-   dart run build_runner build --delete-conflicting-outputs
+   dart run build_runner build
    ```
 
 3. **Run the app**

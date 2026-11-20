@@ -37,8 +37,10 @@ class LanguageDropdown extends StatelessWidget {
     final offered = languages ?? SupportedLanguages.learning;
     final items = offered.contains(value) ? offered : [...offered, value];
 
+    // A changed initialValue is applied on rebuild, so the field still
+    // follows [value] (e.g. a profile that loads after the first frame).
     return DropdownButtonFormField<String>(
-      value: value,
+      initialValue: value,
       decoration: InputDecoration(labelText: label),
       validator: validator,
       items: [

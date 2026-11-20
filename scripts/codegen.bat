@@ -5,7 +5,7 @@ echo ========================================
 echo Running code generation...
 echo ========================================
 
-dart run build_runner build --delete-conflicting-outputs
+dart run build_runner build
 
 if %ERRORLEVEL% EQU 0 (
     echo.
