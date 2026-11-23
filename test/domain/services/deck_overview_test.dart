@@ -67,8 +67,10 @@ void main() {
       final memoryMap = {
         'due': memory('due',
             nextReviewAt: now.subtract(const Duration(minutes: 1))),
-        'later':
-            memory('later', nextReviewAt: now.add(const Duration(days: 2))),
+        'later': memory('later',
+            reviewCount: 1,
+            repetitions: 1,
+            nextReviewAt: now.add(const Duration(days: 2))),
         'other-deck': memory('other-deck', nextReviewAt: now),
       };
 
@@ -84,6 +86,29 @@ void main() {
       expect(
         DeckOverview.dueCount(words: words, memory: memoryMap, now: now),
         3,
+      );
+    });
+
+    test('counts words being learnt or just missed, as the review takes them',
+        () {
+      final tomorrow = now.add(const Duration(days: 1));
+      final words = [vocab('learning'), vocab('lapsed'), vocab('recalled')];
+      final memoryMap = {
+        'learning': memory('learning',
+            reviewCount: 1, incorrectCount: 1, nextReviewAt: tomorrow),
+        'lapsed': memory('lapsed',
+            reviewCount: 2,
+            correctCount: 1,
+            incorrectCount: 1,
+            consecutiveCorrect: 0,
+            nextReviewAt: tomorrow),
+        'recalled': memory('recalled',
+            reviewCount: 1, repetitions: 1, nextReviewAt: tomorrow),
+      };
+
+      expect(
+        DeckOverview.dueCount(words: words, memory: memoryMap, now: now),
+        2,
       );
     });
   });

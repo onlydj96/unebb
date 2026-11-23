@@ -8,20 +8,24 @@ import 'package:unebb/domain/services/memory_service.dart';
 ///
 /// Ordering rules:
 /// 1. Words never reviewed (`reviewCount == 0`) always come first, shuffled.
-/// 2. Reviewed words are split into priority tiers by [priorityScore]
-///    (lower score = more urgent) and interleaved with weighted randomness
-///    (60% high / 30% medium / 10% low) so sessions stay varied while
-///    struggling words surface early.
+/// 2. Reviewed words follow by [priorityScore], most urgent first: words
+///    still being learnt or just missed (strength 0) before fading ones,
+///    and those before words the learner remembers. Equal scores are in
+///    random order. Sessions are usually limited, so a remembered word
+///    only takes a place when no struggling word is left for it.
 class ReviewQueueBuilder {
   const ReviewQueueBuilder({this.memory = const MemoryService()});
 
   final MemoryService memory;
 
-  /// Whether [state] is due at [now].
-  bool isDue(MemoryState state, DateTime now) => memory.isDue(state, now);
+  /// Whether a `'due'` session at [now] takes [state]
+  /// ([MemoryService.isUpForReview]).
+  bool isUpForReview(MemoryState state, DateTime now) =>
+      memory.isUpForReview(state, now);
 
-  /// Selects the states to review for [mode] (`'due'` or `'all'`) and returns
-  /// them in review order.
+  /// Selects the states to review for [mode] (`'due'`: due words plus words
+  /// being learnt or just missed; `'all'`: every word) and returns them in
+  /// review order.
   List<MemoryState> build(
     List<MemoryState> states, {
     required String mode,
@@ -29,8 +33,9 @@ class ReviewQueueBuilder {
     Random? random,
   }) {
     final at = (now ?? DateTime.now()).toUtc();
-    final candidates =
-        mode == 'all' ? states : states.where((s) => isDue(s, at)).toList();
+    final candidates = mode == 'all'
+        ? states
+        : states.where((s) => isUpForReview(s, at)).toList();
     return order(candidates, now: at, random: random);
   }
 
@@ -66,41 +71,16 @@ class ReviewQueueBuilder {
     final newWords = states.where((s) => s.reviewCount == 0).toList()
       ..shuffle(rng);
 
-    final high = <MemoryState>[];
-    final medium = <MemoryState>[];
-    final low = <MemoryState>[];
-    for (final state in states.where((s) => s.reviewCount > 0)) {
-      final score = priorityScore(state, at);
-      if (score < 0.4) {
-        high.add(state);
-      } else if (score < 0.7) {
-        medium.add(state);
-      } else {
-        low.add(state);
-      }
-    }
-    high.shuffle(rng);
-    medium.shuffle(rng);
-    low.shuffle(rng);
+    // Random tie-break: words with the same score (e.g. all recalled once
+    // yesterday) come in a different order each session.
+    final reviewed = [
+      for (final s in states.where((s) => s.reviewCount > 0))
+        (state: s, score: priorityScore(s, at), tie: rng.nextDouble()),
+    ]..sort((a, b) {
+        final byScore = a.score.compareTo(b.score);
+        return byScore != 0 ? byScore : a.tie.compareTo(b.tie);
+      });
 
-    final result = <MemoryState>[...newWords];
-    var h = 0, m = 0, l = 0;
-    while (h < high.length || m < medium.length || l < low.length) {
-      final dice = rng.nextInt(100);
-      if (dice < 60 && h < high.length) {
-        result.add(high[h++]);
-      } else if (dice < 90 && m < medium.length) {
-        result.add(medium[m++]);
-      } else if (l < low.length) {
-        result.add(low[l++]);
-      } else if (h < high.length) {
-        result.add(high[h++]);
-      } else if (m < medium.length) {
-        result.add(medium[m++]);
-      } else {
-        result.add(low[l++]);
-      }
-    }
-    return result;
+    return [...newWords, for (final r in reviewed) r.state];
   }
 }

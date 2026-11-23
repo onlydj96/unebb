@@ -85,6 +85,14 @@ class MemoryService {
   bool isDue(MemoryState state, DateTime now) =>
       !state.nextReviewAt.isAfter(now);
 
+  /// Whether a review of the due words (`'due'` mode, the due count) takes
+  /// [state] at [now]: its due day has come, or it is not recalled yet —
+  /// new, still being learnt, or just missed. Those wait for nothing, so a
+  /// word missed in the morning comes back in the next session, not only
+  /// tomorrow. The schedule itself is unchanged ([isDue]).
+  bool isUpForReview(MemoryState state, DateTime now) =>
+      state.consecutiveCorrect == 0 || isDue(state, now);
+
   /// Start of the learning day [days] after the one [at] falls in (UTC).
   ///
   /// Intervals count days, so a word is due all through its due day

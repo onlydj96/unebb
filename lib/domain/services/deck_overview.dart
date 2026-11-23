@@ -1,6 +1,7 @@
 import 'package:unebb/domain/models/deck.dart';
 import 'package:unebb/domain/models/memory_state.dart';
 import 'package:unebb/domain/models/vocabulary_item.dart';
+import 'package:unebb/domain/services/memory_service.dart';
 
 /// Pure presentation-independent deck ordering and counting.
 ///
@@ -49,20 +50,23 @@ abstract final class DeckOverview {
     return arranged;
   }
 
-  /// Number of words in [deckId] (or all words when null) due at [now].
+  /// Number of words in [deckId] (or all words when null) a `'due'` review
+  /// at [now] takes: due words plus words being learnt or just missed
+  /// ([MemoryService.isUpForReview]), the same rule as the review queue.
   static int dueCount({
     required List<VocabularyItem> words,
     required Map<String, MemoryState> memory,
     String? deckId,
     DateTime? now,
   }) {
-    final at = now ?? DateTime.now();
+    const memoryService = MemoryService();
+    final at = (now ?? DateTime.now()).toUtc();
     var due = 0;
     for (final word in words) {
       if (deckId != null && word.deckId != deckId) continue;
       final state = memory[word.id];
       // Words without a memory state yet are new → due immediately.
-      if (state == null || !state.nextReviewAt.isAfter(at)) due++;
+      if (state == null || memoryService.isUpForReview(state, at)) due++;
     }
     return due;
   }

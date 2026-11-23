@@ -86,8 +86,19 @@ the client (`clockProvider` ticks every minute) and never stored;
 Percentages are shown rounded down, so a word at 0.799 reads 79% (good),
 never 80%.
 
-The review queue orders reviewed words by this current strength (plus
-miss ratio and overdue days), not by the stored one.
+A review of the due words (`'due'` mode, and the due count on the
+dashboard and decks) takes every word whose due day has come **and** every
+word not recalled yet — new, still being learnt, or just missed
+(`MemoryService.isUpForReview`). Those wait for nothing: a word missed in
+the morning comes back in the next session instead of only tomorrow. Its
+schedule is unchanged; once recalled it waits for its due day like any
+other word.
+
+The review queue (`ReviewQueueBuilder`) puts words never reviewed first,
+then the reviewed ones by this current strength (plus miss ratio and
+overdue days), not by the stored one — weakest first, no random mixing.
+Words still being learnt or just missed (strength 0) therefore fill a
+limited session before any word the learner remembers.
 
 A review whose save fails (offline, server error) is kept in a local
 queue, shown in place of the server's copy, and saved by the next

@@ -139,9 +139,11 @@ void main() {
   testWidgets('when nothing is due the learner can review all words instead',
       (tester) async {
     final env = _Env(['a']);
+    // Recalled and scheduled later (a word not recalled yet is always due).
     env.memRepo.states[0] = memory(
       'a',
       reviewCount: 2,
+      repetitions: 2,
       nextReviewAt: DateTime.now().toUtc().add(const Duration(days: 3)),
     );
     await tester.pumpWidget(await testApp(
